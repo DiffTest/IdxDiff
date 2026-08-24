@@ -1,0 +1,31 @@
+package idxdiff.common.ast.newast;
+
+import idxdiff.Randomly;
+
+public class NewOrderingTerm<T> {
+
+    private final T expr;
+    private final Ordering ordering;
+
+    public enum Ordering {
+        ASC, DESC;
+
+        public static Ordering getRandom() {
+            return Randomly.fromOptions(values());
+        }
+    }
+
+    public NewOrderingTerm(T expr, Ordering ordering) {
+        this.expr = expr;
+        this.ordering = ordering;
+    }
+
+    public T getExpr() {
+        return expr;
+    }
+
+    public Ordering getOrdering() {
+        return ordering;
+    }
+
+}

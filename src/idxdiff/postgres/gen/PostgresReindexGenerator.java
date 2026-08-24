@@ -1,0 +1,65 @@
+package idxdiff.postgres.gen;
+
+import java.util.List;
+
+import idxdiff.IgnoreMeException;
+import idxdiff.Randomly;
+import idxdiff.common.query.ExpectedErrors;
+import idxdiff.common.query.SQLQueryAdapter;
+import idxdiff.postgres.PostgresGlobalState;
+import idxdiff.postgres.PostgresSchema.PostgresIndex;
+
+public final class PostgresReindexGenerator {
+
+    private PostgresReindexGenerator() {
+    }
+
+    private enum Scope {
+        INDEX, TABLE, DATABASE;
+    }
+
+    public static SQLQueryAdapter create(PostgresGlobalState globalState) {
+        ExpectedErrors errors = new ExpectedErrors();
+        errors.add("could not create unique index"); // CONCURRENT INDEX
+        StringBuilder sb = new StringBuilder();
+        sb.append("REINDEX");
+        // if (Randomly.getBoolean()) {
+        // sb.append(" VERBOSE");
+        // }
+        sb.append(" ");
+        Scope scope = Randomly.fromOptions(Scope.values());
+        switch (scope) {
+        case INDEX:
+            sb.append("INDEX ");
+            if (Randomly.getBoolean()) {
+                sb.append("CONCURRENTLY ");
+            }
+            List<PostgresIndex> indexes = globalState.getSchema().getRandomTable().getIndexes();
+            if (indexes.isEmpty()) {
+                throw new IgnoreMeException();
+            }
+            sb.append(Randomly.fromList(indexes).getIndexName());
+            break;
+        case TABLE:
+            sb.append("TABLE ");
+            if (Randomly.getBoolean()) {
+                sb.append("CONCURRENTLY ");
+            }
+            sb.append(globalState.getSchema().getRandomTable(t -> !t.isView()).getName());
+            break;
+        case DATABASE:
+            sb.append("DATABASE ");
+            if (Randomly.getBoolean()) {
+                sb.append("CONCURRENTLY ");
+            }
+            sb.append(globalState.getSchema().getDatabaseName());
+            break;
+        default:
+            throw new AssertionError(scope);
+        }
+        errors.add("already contains data"); // FIXME bug report
+        errors.add("REINDEX is not yet implemented for partitioned indexes");
+        return new SQLQueryAdapter(sb.toString(), errors);
+    }
+
+}

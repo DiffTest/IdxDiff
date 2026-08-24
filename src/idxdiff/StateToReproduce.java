@@ -1,0 +1,188 @@
+package idxdiff;
+
+import java.io.Closeable;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
+import java.io.Serializable;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
+
+import idxdiff.common.query.Query;
+
+public class StateToReproduce implements Serializable {
+    private static final long serialVersionUID = 1L;
+
+    private List<Query<?>> statements = new ArrayList<>();
+
+    private final String databaseName;
+
+    private transient DatabaseProvider<?, ?, ?> databaseProvider;
+
+    public String databaseVersion;
+
+    protected long seedValue;
+
+    String exception;
+
+    public transient OracleRunReproductionState localState;
+
+    public StateToReproduce(String databaseName, DatabaseProvider<?, ?, ?> databaseProvider) {
+        this.databaseName = databaseName;
+        this.databaseProvider = databaseProvider;
+    }
+
+    public String getException() {
+        return exception;
+    }
+
+    public String getDatabaseName() {
+        return databaseName;
+    }
+
+    public String getDatabaseVersion() {
+        return databaseVersion;
+    }
+
+    public DatabaseProvider<?, ?, ?> getDatabaseProvider() {
+        return databaseProvider;
+    }
+
+    /**
+     * Logs the statement string without executing the corresponding statement.
+     *
+     * @param queryString
+     *            the query string to be logged
+     */
+    public void logStatement(String queryString) {
+        if (queryString == null) {
+            throw new IllegalArgumentException();
+        }
+        logStatement(databaseProvider.getLoggableFactory().getQueryForStateToReproduce(queryString));
+    }
+
+    /**
+     * Logs the statement without executing it.
+     *
+     * @param query
+     *            the query to be logged
+     */
+    public void logStatement(Query<?> query) {
+        if (query == null) {
+            throw new IllegalArgumentException();
+        }
+        statements.add(query);
+    }
+
+    public List<Query<?>> getStatements() {
+        return Collections.unmodifiableList(statements);
+    }
+
+    /**
+     * @deprecated
+     */
+    @Deprecated
+    public void commentStatements() {
+        for (int i = 0; i < statements.size(); i++) {
+            Query<?> statement = statements.get(i);
+            Query<?> newQuery = databaseProvider.getLoggableFactory().commentOutQuery(statement);
+            statements.set(i, newQuery);
+        }
+    }
+
+    public long getSeedValue() {
+        return seedValue;
+    }
+
+    /**
+     * Returns a local state in which a test oracle can save useful information about a single run. If the local state
+     * is closed without indicating access to it, the local statements will be added to the global state.
+     *
+     * @return the local state for logging
+     */
+    public OracleRunReproductionState getLocalState() {
+        return localState;
+    }
+
+    /**
+     * State information that is logged if the test oracle finds a bug or if an exception is thrown.
+     */
+    public class OracleRunReproductionState implements Closeable {
+
+        private final List<Query<?>> statements = new ArrayList<>();
+
+        private boolean success;
+
+        public OracleRunReproductionState() {
+            StateToReproduce.this.localState = this;
+        }
+
+        public void executedWithoutError() {
+            this.success = true;
+        }
+
+        public void log(String s) {
+            statements.add(databaseProvider.getLoggableFactory().getQueryForStateToReproduce(s));
+        }
+
+        @Override
+        public void close() {
+            if (!success) {
+                StateToReproduce.this.statements.addAll(statements);
+            }
+
+        }
+
+    }
+
+    public OracleRunReproductionState createLocalState() {
+        return new OracleRunReproductionState();
+    }
+
+    public void serialize(Path path) {
+        try (ObjectOutputStream oos = new ObjectOutputStream(Files.newOutputStream(path))) {
+            oos.writeObject(this);
+        } catch (IOException e) {
+            throw new AssertionError(e);
+        }
+    }
+
+    public static StateToReproduce deserialize(Path path) {
+        try (ObjectInputStream ois = new ObjectInputStream(Files.newInputStream(path))) {
+            return (StateToReproduce) ois.readObject();
+        } catch (IOException | ClassNotFoundException e) {
+            throw new AssertionError(e);
+        }
+    }
+
+    private void writeObject(ObjectOutputStream out) throws IOException {
+        out.defaultWriteObject();
+
+        out.writeObject(this.databaseProvider != null ? this.databaseProvider.getDBMSName() : null);
+    }
+
+    private void readObject(ObjectInputStream in) throws IOException, ClassNotFoundException {
+        in.defaultReadObject();
+        String dbmsName = (String) in.readObject();
+
+        DatabaseProvider<?, ?, ?> provider = null;
+        if (dbmsName != null) {
+            List<DatabaseProvider<?, ?, ?>> providers = Main.getDBMSProviders();
+            for (DatabaseProvider<?, ?, ?> p : providers) {
+                if (p.getDBMSName().equals(dbmsName)) {
+                    provider = p;
+                    break;
+                }
+            }
+        }
+        this.databaseProvider = provider;
+    }
+
+    public void setStatements(List<Query<?>> statements) {
+        this.statements = statements;
+    }
+
+}

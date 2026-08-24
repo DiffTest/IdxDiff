@@ -1,0 +1,128 @@
+package idxdiff.tidb;
+
+import java.util.ArrayList;
+import java.util.List;
+
+import idxdiff.common.query.ExpectedErrors;
+
+public final class TiDBErrors {
+
+    private TiDBErrors() {
+    }
+
+    public static List<String> getExpressionErrors() {
+        ArrayList<String> errors = new ArrayList<>();
+
+        errors.add("DECIMAL value is out of range");
+        errors.add("error parsing regexp");
+        errors.add("BIGINT UNSIGNED value is out of range");
+        errors.add("Data truncation: Truncated incorrect time value");
+        errors.add("Data truncation: Incorrect time value");
+        errors.add("Data truncation: Incorrect datetime value");
+        errors.add("overflows double");
+        errors.add("overflows bigint");
+        errors.add("strconv.ParseFloat: parsing");
+        // REMOVED: "in 'order clause'" — too broad, masks ORDER BY index bugs in index fuzzer
+
+        // functions
+        errors.add("BIGINT value is out of range");
+        errors.add("doesn't have a default value"); // default
+        errors.add("is not valid for CHARACTER SET");
+        errors.add("DOUBLE value is out of range");
+        errors.add("Result of space() was larger than max_allowed_packet");
+
+        errors.add("Data truncat");
+        errors.add("Truncated incorrect FLOAT value");
+        errors.add("Bad Number");
+        errors.add("strconv.Atoi: parsing");
+        errors.add("expected integer");
+        // REMOVED: "Duplicate entry" — SELECT queries should never produce this; kept in getInsertErrors() for DML
+
+        // regex
+        errors.add("error parsing regexp");
+        errors.add("from regexp");
+        errors.add("Empty pattern is invalid");
+        errors.add("Invalid regexp pattern");
+
+        // expression index on auto-increment column
+        errors.add("cannot refer to an auto-increment column");
+        // SET variable invalid value
+        errors.add("can't be set to the value");
+
+        // To avoid bugs
+        // REMOVED: "Unknown column" — bug35522 is fixed, should not mask new Unknown column errors
+        errors.add("Unknown system variable"); // session variables may not exist in all TiDB versions
+        errors.add("Can\'t find column"); // https://github.com/pingcap/tidb/issues/35527
+        // REMOVED: "Cannot convert" — bug35652 is fixed, should not mask new conversion errors
+
+        if (TiDBBugs.bug35677) {
+            errors.add("for function inet_aton");
+        }
+        if (TiDBBugs.bug35522) {
+            errors.add("ERROR 1054 (42S22)");
+        }
+        if (TiDBBugs.bug35652) {
+            errors.add("from binary to utf8");
+        }
+        if (TiDBBugs.bug38295) {
+            errors.add("assertion failed");
+        }
+        if (TiDBBugs.bug44747) {
+            errors.add("index out of range");
+        }
+
+        return errors;
+    }
+
+    public static void addExpressionErrors(ExpectedErrors errors) {
+        errors.addAll(getExpressionErrors());
+    }
+
+    public static List<String> getExpressionHavingErrors() {
+        ArrayList<String> errors = new ArrayList<>();
+
+        errors.add("is not in GROUP BY clause and contains nonaggregated column");
+        errors.add("Unknown column");
+
+        return errors;
+    }
+
+    public static void addExpressionHavingErrors(ExpectedErrors errors) {
+        errors.addAll(getExpressionHavingErrors());
+    }
+
+    public static List<String> getInsertErrors() {
+        ArrayList<String> errors = new ArrayList<>();
+
+        errors.add("Duplicate entry");
+        errors.add("cannot be null");
+        errors.add("doesn't have a default value");
+        errors.add("Out of range value");
+        errors.add("Incorrect double value");
+        errors.add("Incorrect float value");
+        errors.add("Incorrect int value");
+        errors.add("Incorrect tinyint value");
+        errors.add("Data truncation");
+        errors.add("Bad Number");
+        errors.add("The value specified for generated column"); // TODO: do not insert data into generated columns
+        errors.add("incorrect utf8 value");
+        errors.add("Data truncation: %s value is out of range in '%s'");
+        errors.add("Incorrect smallint value");
+        errors.add("Incorrect bigint value");
+        errors.add("Incorrect decimal value");
+        errors.add("error parsing regexp");
+        errors.add("is not valid for CHARACTER SET");
+        errors.add("for function inet_aton");
+        errors.add("'Empty pattern is invalid' from regexp");
+        errors.add("Data too long for expression index");
+        errors.add("Data too long for column");
+        errors.add("Data Too Long");
+
+        return errors;
+    }
+
+    public static void addInsertErrors(ExpectedErrors errors) {
+        errors.addAll(getInsertErrors());
+    }
+
+}
