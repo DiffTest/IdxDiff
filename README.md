@@ -1,10 +1,10 @@
-# idxdiff — Index Differential Testing
+# IdxDiff — Index Differential Testing
 
-idxdiff is an extended version of SQLancer focused on finding index-related logic bugs in relational database systems. It generates random SQL workloads and executes every query under multiple index / optimizer strategies (index hints, optimizer switches, index type swaps); a bug is reported whenever the strategies disagree on the result set. Each DBMS ships a dedicated `IndexOracle` tailored to that system's index hints and optimizer switches.
+IdxDiff is a differential testing tool for finding index-related bugs in RDBMSs.
 
 ## Bug List
 
-This section lists the bugs found by idxdiff. Each entry includes a link to the corresponding bug report.
+This section lists the bugs found by IdxDiff. Each entry includes a link to the corresponding bug report.
 
 ### MySQL Bugs
 
@@ -48,7 +48,7 @@ This section lists the bugs found by idxdiff. Each entry includes a link to the 
 
 *   **[TiDB Issue #68455](https://github.com/pingcap/tidb/issues/68455)** (Confirmed)
 
-*   **[TiDB Issue #68533](https://github.com/pingcap/tidb/issues/68533)** (Confirmed)
+*   **[TiDB Issue #68533](https://github.com/pingcap/tidb/issues/68533)** (Confirmed, Critical)
 
 ### PolarDB-X Bugs
 
@@ -100,7 +100,7 @@ java -jar target/idxdiff-*.jar \
     --password test
 ```
 
-For the other supported databases, replace `mysql` with `mariadb`, `tidb`, `postgres`, or `polardb` accordingly.
+For the other supported databases, replace `mysql` with `mariadb`, `tidb`, or `polardb` accordingly.
 
 Useful flags:
 
