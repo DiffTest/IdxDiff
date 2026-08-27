@@ -1,6 +1,6 @@
 # IdxDiff — Index Differential Testing
 
-IdxDiff is a differential testing tool for finding index-related bugs in RDBMSs.
+IdxDiff is a differential testing tool for finding index-related bugs in DBMSs.
 
 ## Bug List
 

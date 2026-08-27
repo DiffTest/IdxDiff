@@ -81,6 +81,11 @@ import idxdiff.mariadb.gen.MariaDBIndexGenerator;
  * <li>29: FUNCTIONAL_INDEX (Phase G — via generated column)</li>
  * <li>30: DML_INDEX_CONSISTENCY (Phase G)</li>
  * <li>31: DESC_INDEX_SORT (Phase G)</li>
+ * <li>32: DROP_COLUMN_WITH_INDEX (Phase P1)</li>
+ * <li>33: GENERATED_COLUMN_INDEX (Phase P1)</li>
+ * <li>34: COLLATION_INDEX (Phase P1)</li>
+ * <li>35: TYPE_MISMATCH_INDEX (Phase P1)</li>
+ * <li>36: SQL_SEMANTIC_EQUIVALENCE (Phase P1)</li>
  * </ul>
  */
 public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
@@ -162,7 +167,6 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         try {
             int mode = Randomly.fromOptions(
                     // === HIGH WEIGHT (2x): High bug density / MariaDB-specific ===
-                            // FULLTEXT Index (2x weight)
                     13, 13,         // Covering Index
                     14, 14,         // Index Merge
                     15, 15,         // Loose Index Scan
@@ -1050,11 +1054,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
 
     // ==================== Mode 12: Aggregate Plan ====================
 
-    /**
-     * P3-2: Upgraded to use AST-based aggregate query generation with index-aware WHERE.
-     * 50% uses generateASTAggregateQuery() (complex WHERE + GROUP BY),
-     * 50% uses simple aggregate patterns (original behavior).
-     */
+    // 50% AST-based aggregate with index-aware WHERE, 50% simple aggregate fallback.
     private void checkAggregatePlan() throws Exception {
         MariaDBSchema schema = globalState.getSchema();
         List<MariaDBTable> tables = schema.getDatabaseTables();
@@ -1963,12 +1963,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
 
     // ==================== Mode 24: Rowid Filter (Phase C — MariaDB-only) ====================
 
-    /**
-     * Test MariaDB's rowid_filter optimization (MariaDB 10.4+).
-     * Compares query results with rowid_filter=on vs rowid_filter=off.
-     * The Rowid Filter optimization creates a filter on row IDs from a secondary index
-     * before accessing the primary key, which can affect result correctness.
-     */
+    // Compares rowid_filter=on vs off (MariaDB 10.4+). Tests result correctness under this optimization.
     private void checkRowidFilter() throws Exception {
         MariaDBSchema schema = globalState.getSchema();
         List<MariaDBTable> tables = schema.getDatabaseTables();
@@ -2020,12 +2015,8 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
 
     // ==================== Mode 25: Not Null Range Scan (Phase C — MariaDB-only) ====================
 
-    /**
-     * Test MariaDB's not_null_range_scan optimization.
-     * This optimization converts certain range scans on NOT NULL columns
-     * to more efficient scans. Toggling it should not change query results.
-     * Note: May crash on some MariaDB versions (MDEV-32076), so errors are caught.
-     */
+    // Toggles not_null_range_scan optimizer switch and verifies result consistency.
+    // Note: may crash on some MariaDB versions (MDEV-32076), so errors are caught.
     private void checkNotNullRangeScan() throws Exception {
         MariaDBSchema schema = globalState.getSchema();
         List<MariaDBTable> tables = schema.getDatabaseTables();
@@ -2106,11 +2097,8 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
 
     // ==================== Mode 26: Index Merge Intersection (Phase C — MariaDB-only) ====================
 
-    /**
-     * Test MariaDB's index_merge_intersection and index_merge_sort_intersection.
-     * Creates two single-column indexes and runs an AND condition query,
-     * comparing default vs intersection disabled.
-     */
+    // Tests index_merge_intersection and index_merge_sort_intersection; compares AND-condition
+    // query results with intersection enabled vs disabled.
     private void checkIndexMergeIntersection() throws Exception {
         MariaDBSchema schema = globalState.getSchema();
         List<MariaDBTable> tables = schema.getDatabaseTables();
@@ -2183,12 +2171,8 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
 
     // ==================== Mode 27: Join Cache Level (Phase C — MariaDB-only) ====================
 
-    /**
-     * Test MariaDB's join_cache_level (levels 1-8).
-     * Different join cache levels use different join buffer strategies
-     * (flat, incremental, hash, etc.). Compares two random levels.
-     * Note: Does not use optimize_join_buffer_size due to MDEV-32099 crash.
-     */
+    // Compares two random join_cache_level values (1-8) to verify consistent results.
+    // Avoids optimize_join_buffer_size due to MDEV-32099 crash.
     private void checkJoinCacheLevel() throws Exception {
         MariaDBSchema schema = globalState.getSchema();
         List<MariaDBTable> tables = new ArrayList<>(schema.getDatabaseTables());
@@ -2259,11 +2243,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
 
     // ==================== Mode 28: Condition Pushdown for Derived (Phase C — MariaDB-only) ====================
 
-    /**
-     * Test MariaDB's condition_pushdown_for_derived and condition_pushdown_for_subquery.
-     * These optimizations push WHERE conditions into derived tables and subqueries.
-     * Toggling them should not change query results.
-     */
+    // Toggles condition_pushdown_for_derived/subquery and verifies results are unchanged.
     private void checkConditionPushdownDerived() throws Exception {
         MariaDBSchema schema = globalState.getSchema();
         List<MariaDBTable> tables = schema.getDatabaseTables();
@@ -2439,15 +2419,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         return plan;
     }
 
-    /**
-     * Compares type (col 3), key (col 5), AND Extra column (last col) between two plans.
-     * MariaDB EXPLAIN columns (0-indexed): 0=id, 1=select_type, 2=table,
-     * 3=type, 4=possible_keys, 5=key, 6=key_len, 7=ref, 8=rows, 9=Extra
-     * Detects differences in:
-     * - Access type (ALL, ref, range, index, eq_ref, etc.)
-     * - Index used (key column)
-     * - Extra information (Using index, Using index condition, Using MRR, Rowid filter, etc.)
-     */
+    // Compares EXPLAIN plans by access type (col 3), key (col 5), and Extra column.
     private boolean plansAreDifferent(List<String> plan1, List<String> plan2) {
         if (plan1.isEmpty() || plan2.isEmpty()) {
             explainFiltered++;
@@ -2497,11 +2469,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         return false;
     }
 
-    /**
-     * Phase E3: Determine if a difference in the Extra column is meaningful enough
-     * to indicate a genuinely different execution plan that warrants result comparison.
-     * Ignores cosmetic differences but catches optimization strategy changes.
-     */
+    // Returns true if the Extra column difference signals a genuinely different execution strategy.
     private boolean plansAreDifferentByExtra(String extra1, String extra2) {
         // Key optimization indicators that indicate genuinely different plans
         String[] meaningfulIndicators = {
@@ -2551,14 +2519,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
 
     // ==================== Query Generation Methods ====================
 
-    /**
-     * Generate a query targeting a specific table.
-     * Used by Mode 0/1/9 to ensure query and index operations target the same table.
-     */
-    /**
-     * P3-1: Upgraded to use AST-based generation (BETWEEN, CASE, CAST, EXISTS, etc.)
-     * 60% AST-based complex query, 40% simple string query as fallback.
-     */
+    // Used by modes 0/1/9. 60% AST-based complex query, 40% simple string fallback.
     private String generateQueryForTable(MariaDBTable table) {
         if (table.getColumns().isEmpty())
             return null;
@@ -2583,10 +2544,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         }
     }
 
-    /**
-     * P3-1: Generate an AST-based query for a specific table.
-     * Uses MariaDBExpressionGenerator with BETWEEN, CASE, CAST, EXISTS, ORDER BY, LIMIT.
-     */
+    // Generates AST-based query using MariaDBExpressionGenerator (BETWEEN, CASE, CAST, EXISTS, etc.).
     private String generateASTQueryForTable(MariaDBTable table) {
         List<MariaDBColumn> columns = table.getColumns();
         if (columns.isEmpty()) return null;
@@ -2670,17 +2628,9 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         }
     }
 
-    /**
-     * Phase A1: Multi-strategy WHERE clause generation (7 strategies aligned with TiDB).
-     * Generates index-aware queries using varied WHERE clause patterns:
-     * Strategy 0: Equality (col = sampled_value)
-     * Strategy 1: Range (col >= a AND col <= b) using two sampled values
-     * Strategy 2: IS NOT NULL + extra condition on second column
-     * Strategy 3: IN list using sampled values
-     * Strategy 4: Multi-column conditions for composite indexes
-     * Strategy 5: Composite index prefix (equality on prefix, range on last)
-     * Strategy 6: Index Merge simulation (OR conditions across columns)
-     */
+    // Generates a WHERE clause using one of 7 strategies to maximize index utilization.
+    // Strategy 0: equality, 1: range, 2: IS NOT NULL+extra, 3: IN list,
+    // 4: multi-column, 5: composite prefix, 6: index merge (OR).
     private String generateIndexAwareQueryString(MariaDBTable table, MariaDBIndex idx) {
         String tblName = table.getName();
         List<String> idxCols = idx.getColumnNames();
@@ -2894,10 +2844,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
 
     // ==================== Phase A1: Column Value Sampling ====================
 
-    /**
-     * Sample actual column values from the table for data-aware query generation.
-     * Results are cached per check() cycle to reduce database round-trips.
-     */
+    // Samples actual column values for data-aware generation. Cached per check() cycle.
     private List<String> sampleColumnValues(String tableName, String colName, int limit) {
         String cacheKey = tableName + "." + colName;
         if (columnValueCache.containsKey(cacheKey)) {
@@ -2930,10 +2877,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         return values.isEmpty() ? null : values;
     }
 
-    /**
-     * Quote a value for use in SQL based on the column type.
-     * Numeric types are returned unquoted; string types are single-quoted with escaping.
-     */
+    // Returns unquoted numeric literals and single-quoted+escaped string literals.
     private String quoteValueForSQL(String value, MariaDBColumn col) {
         if (value == null || value.equalsIgnoreCase("NULL")) {
             return "NULL";
@@ -2961,10 +2905,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
 
     // ==================== Phase A2: information_schema Index Metadata ====================
 
-    /**
-     * Query information_schema.STATISTICS to get indexed columns for a table.
-     * Falls back to schema-based approach if the query fails.
-     */
+    // Gets indexed (non-PK) columns via information_schema.STATISTICS; falls back to schema.
     private List<MariaDBColumn> getIndexedColumnsForTable(MariaDBTable table) {
         List<MariaDBColumn> indexedColumns = new ArrayList<>();
         try (Statement s = globalState.getConnection().createStatement()) {
@@ -2999,11 +2940,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         return indexedColumns;
     }
 
-    /**
-     * Query information_schema.STATISTICS to get composite index column groups.
-     * Returns a list of column lists, one per non-primary index, ordered by SEQ_IN_INDEX.
-     * Falls back to schema-based approach if the query fails.
-     */
+    // Returns column groups per non-PK index, ordered by SEQ_IN_INDEX. Falls back to schema.
     private List<List<MariaDBColumn>> getCompositeIndexGroups(MariaDBTable table) {
         Map<String, List<MariaDBColumn>> indexGroups = new HashMap<>();
         try (Statement s = globalState.getConnection().createStatement()) {
@@ -3047,11 +2984,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
 
     // ==================== Phase A3: COUNT(*) Fallback ====================
 
-    /**
-     * When result comparison is filtered (LIMIT w/o ORDER BY, non-deterministic GROUP BY, etc.),
-     * use COUNT(*) as a deterministic fallback to still detect real index bugs.
-     * COUNT(*) is deterministic regardless of row ordering or LIMIT tie-breaking.
-     */
+    // Fallback when row-level comparison is filtered: compares COUNT(*) to catch real bugs.
     private void countStarFallback(String queryA, String queryB, String mode) {
         aggregateFallbackUsed++;
         try {
@@ -3074,11 +3007,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         }
     }
 
-    /**
-     * Wrap a query in SELECT COUNT(*) FROM (original_query) AS subq.
-     * Strips trailing semicolons and removes top-level ORDER BY/LIMIT (not needed for COUNT).
-     * Uses backward search from the end to avoid accidentally stripping ORDER BY inside subqueries.
-     */
+    // Wraps query in SELECT COUNT(*) FROM (...). Strips top-level ORDER BY/LIMIT first.
     private String wrapInCountStar(String query) {
         try {
             String q = query.trim();
@@ -3096,10 +3025,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         }
     }
 
-    /**
-     * Find the position of the last top-level "ORDER BY" in a SQL string.
-     * "Top-level" means not inside parentheses (i.e., not inside a subquery).
-     */
+    // Finds the last ORDER BY not inside parentheses (i.e., not in a subquery).
     private int findLastTopLevelOrderBy(String sql) {
         String upper = sql.toUpperCase();
         int depth = 0;
@@ -3117,10 +3043,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
 
     // ==================== Phase A3: Non-Deterministic Query Detection ====================
 
-    /**
-     * Check if a query has LIMIT without ORDER BY.
-     * Such queries produce non-deterministic row selection under different plans.
-     */
+    // LIMIT without ORDER BY produces non-deterministic rows under different plans.
     private boolean hasLimitWithoutOrderBy(String query) {
         String upperQuery = query.toUpperCase();
         boolean hasLimit = upperQuery.contains("LIMIT");
@@ -3128,22 +3051,14 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         return hasLimit && !hasOrderBy;
     }
 
-    /**
-     * Check if the query has both ORDER BY and LIMIT.
-     * When ORDER BY columns have duplicate/equivalent values under MariaDB's
-     * collation (case-insensitive, PAD SPACE), different execution plans may
-     * non-deterministically pick different rows at the LIMIT boundary
-     * (database63.log false positive). The sort is unstable for collation-equal values.
-     */
+    // ORDER BY + LIMIT may non-deterministically pick different rows at the LIMIT boundary
+    // when collation-equal values exist (unstable sort).
     private boolean hasOrderByWithLimit(String query) {
         String upperQuery = query.toUpperCase();
         return upperQuery.contains("ORDER BY") && upperQuery.contains("LIMIT");
     }
 
-    /**
-     * Detect non-deterministic GROUP BY: when GROUP BY expressions contain
-     * only constant values (no column references).
-     */
+    // Returns true when GROUP BY uses only constants (no column refs) — non-deterministic output.
     private boolean hasNonDeterministicGroupBy(String query) {
         String upperQuery = query.toUpperCase();
         if (!upperQuery.contains("GROUP BY")) return false;
@@ -3172,14 +3087,9 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         return true;
     }
 
-    // ==================== Phase A4: AST Expression Generation ====================
-    // ==================== Phase I: Index-Friendly AST Enhancement ====================
+    // ==================== AST Expression Generation ====================
 
-    /**
-     * Generate a query using index-friendly AST WHERE clause.
-     * Phase I: Now uses tryGenerateIndexFriendlyWhere() for higher index hit rate.
-     * Falls back to MariaDBExpressionGenerator for complex random expressions.
-     */
+    // 70% index-friendly WHERE via tryGenerateIndexFriendlyWhere(), 30% random complex expression.
     private String generateASTQuery() {
         MariaDBSchema schema = globalState.getSchema();
         List<MariaDBTable> tables = schema.getDatabaseTables();
@@ -3229,10 +3139,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         }
     }
 
-    /**
-     * Generate a multi-table JOIN query using index-friendly JOIN conditions.
-     * Phase I: Now uses generateIndexFriendlyJoinClauses() and tryGenerateIndexFriendlyWhere().
-     */
+    // Multi-table JOIN with index-friendly ON clauses and WHERE.
     private String generateASTJoinQuery() {
         MariaDBSchema schema = globalState.getSchema();
         List<MariaDBTable> tables = new ArrayList<>(schema.getDatabaseTables());
@@ -3281,10 +3188,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         }
     }
 
-    /**
-     * Generate an aggregate query (COUNT/SUM/AVG/MIN/MAX) with optional GROUP BY.
-     * Phase I: Now uses tryGenerateIndexFriendlyWhere() for index-aware WHERE conditions.
-     */
+    // Aggregate query (COUNT/SUM/AVG/MIN/MAX) with index-aware WHERE and optional GROUP BY.
     private String generateASTAggregateQuery() {
         MariaDBSchema schema = globalState.getSchema();
         List<MariaDBTable> tables = schema.getDatabaseTables();
@@ -3330,10 +3234,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
 
     // ==================== Phase I: Index-Friendly AST Helpers ====================
 
-    /**
-     * Get MIN/MAX boundary values for a column.
-     * Used by range condition generators to produce index-friendly range scans.
-     */
+    // Returns {min, max} for a column; used to generate index-friendly range conditions.
     private String[] getColumnMinMax(String tblName, String colName) {
         try (Statement s = globalState.getConnection().createStatement()) {
             try (ResultSet rs = s.executeQuery(
@@ -3352,10 +3253,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         return null;
     }
 
-    /**
-     * Generate an index-friendly constant value based on column type.
-     * Uses data-aware sampling when available, falls back to random constants.
-     */
+    // Returns a data-aware sampled constant for the column type, or a random fallback.
     private MariaDBExpression generateIndexFriendlyConstant(MariaDBColumn col, Randomly r) {
         // Try data-aware value first
         String tblName = null;
@@ -3406,10 +3304,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         }
     }
 
-    /**
-     * Generate an index-friendly range condition for a single column.
-     * col > val, col < val, col >= val, col BETWEEN a AND b
-     */
+    // Generates col > val / col < val / col >= val / col <= val / col BETWEEN a AND b condition.
     private MariaDBExpression generateIndexFriendlyRange(MariaDBExpression colRef, MariaDBColumn col, Randomly r) {
         int opType = r.getInteger(0, 4);
         MariaDBExpression constant = generateIndexFriendlyConstant(col, r);
@@ -3432,10 +3327,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         }
     }
 
-    /**
-     * Generate a simple index condition on a column.
-     * Uses equality or IS NOT NULL.
-     */
+    // Returns col = val (50%) or col IS NOT NULL (50%).
     private MariaDBExpression generateSimpleIndexCondition(MariaDBExpression colRef, MariaDBColumn col, Randomly r) {
         if (Randomly.getBoolean()) {
             return new MariaDBBinaryOperator(colRef, generateIndexFriendlyConstant(col, r),
@@ -3446,18 +3338,10 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         }
     }
 
-    /**
-     * Try to generate an index-friendly WHERE clause using AST expressions.
-     * Analyzes available indexes and picks a strategy that maximizes index utilization.
-     *
-     * Strategies:
-     * 0: Composite prefix condition (equality on prefix, range on last)
-     * 1: Full composite condition (equality on all columns)
-     * 2: Index merge (OR across indexed columns)
-     * 3: Range + NULL condition
-     * 4: Multi-index OR condition
-     * 5: Type-aware condition (simple range with data-aware values)
-     */
+    // Generates a WHERE clause that maximizes index utilization.
+    // Picks strategy based on available indexes:
+    //   0: composite prefix, 1: full composite equality, 2: index merge (OR),
+    //   3: range + NULL, 4: multi-index OR, 5: type-aware condition.
     private MariaDBExpression tryGenerateIndexFriendlyWhere(
             List<MariaDBTable> tables, MariaDBExpressionGenerator gen) {
         try {
@@ -3534,11 +3418,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         }
     }
 
-    /**
-     * Strategy 0: Composite index prefix condition.
-     * For composite index (c0, c1, c2), generate: c0 = val AND c1 > val2
-     * Triggers composite index range scan on the prefix.
-     */
+    // Strategy 0: c0 = val AND c1 > val2 — triggers composite index range scan on the prefix.
     private MariaDBExpression generateCompositePrefixCondition(
             List<List<MariaDBColumn>> compositeIdxCols, List<MariaDBColumn> indexedCols,
             Randomly r, MariaDBExpressionGenerator gen) {
@@ -3574,10 +3454,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         return combined;
     }
 
-    /**
-     * Strategy 1: Full composite index condition.
-     * Use ALL columns of a composite index with equality — triggers unique/ref lookup.
-     */
+    // Strategy 1: equality on all composite index columns — triggers unique/ref lookup.
     private MariaDBExpression generateFullCompositeCondition(
             List<List<MariaDBColumn>> compositeIdxCols, List<MariaDBColumn> indexedCols,
             Randomly r, MariaDBExpressionGenerator gen) {
@@ -3602,10 +3479,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         return combined;
     }
 
-    /**
-     * Strategy 2: Index merge condition — OR across different indexed columns.
-     * c0 = val1 OR c1 = val2 — triggers index_merge optimization.
-     */
+    // Strategy 2: c0 = val1 OR c1 = val2 — triggers index_merge optimization.
     private MariaDBExpression generateIndexMergeCondition(
             List<MariaDBColumn> singleIdxCols, List<MariaDBColumn> indexedCols,
             Randomly r, MariaDBExpressionGenerator gen) {
@@ -3627,10 +3501,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
                 MariaDBBinaryOperator.MariaDBBinaryComparisonOperator.OR);
     }
 
-    /**
-     * Strategy 3: Range condition with NULL handling.
-     * col > val AND col IS NOT NULL, or col BETWEEN a AND b OR col IS NULL
-     */
+    // Strategy 3: range condition combined with IS NULL or IS NOT NULL.
     private MariaDBExpression generateRangeWithNullCondition(
             List<MariaDBColumn> indexedCols, Randomly r, MariaDBExpressionGenerator gen) {
         MariaDBColumn col = Randomly.fromList(indexedCols);
@@ -3652,10 +3523,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         }
     }
 
-    /**
-     * Strategy 4: Multi-index OR condition.
-     * Combines conditions on 2-3 indexed columns with OR to trigger sort-union index merge.
-     */
+    // Strategy 4: OR conditions across 2-3 indexed columns to trigger sort-union index merge.
     private MariaDBExpression generateMultiIndexOrCondition(
             List<MariaDBColumn> indexedCols, Randomly r, MariaDBExpressionGenerator gen) {
         if (indexedCols.size() < 2) return null;
@@ -3691,10 +3559,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         return combined;
     }
 
-    /**
-     * Strategy 5: Type-aware condition using data-aware values.
-     * Simple but effective: col = sampled_value or col > sampled_value.
-     */
+    // Strategy 5: col = sampled_value (50%) or col > sampled_value (50%).
     private MariaDBExpression generateTypeAwareCondition(
             List<MariaDBColumn> indexedCols, Randomly r, MariaDBExpressionGenerator gen) {
         MariaDBColumn col = Randomly.fromList(indexedCols);
@@ -3709,11 +3574,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         }
     }
 
-    /**
-     * Generate index-friendly JOIN clauses for multi-table queries.
-     * Returns a list of JOIN strings like "JOIN t2 ON t1.c1 = t2.c2".
-     * Prefers equijoin conditions on indexed columns for maximum index utilization.
-     */
+    // Returns JOIN clauses preferring equijoin on indexed columns.
     private List<String> generateIndexFriendlyJoinClauses(List<MariaDBTable> tables) {
         List<String> joinClauses = new ArrayList<>();
         if (tables.size() < 2) return joinClauses;
@@ -3748,10 +3609,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         return joinClauses;
     }
 
-    /**
-     * Generate an index-friendly JOIN ON clause between two tables.
-     * Prefers equijoin on indexed columns.
-     */
+    // Returns ON clause with 1-3 column comparisons; prefers equijoin for index utilization.
     private String generateIndexJoinOnClause(String t1Name, MariaDBTable t2) {
         Randomly r = globalState.getRandomly();
 
@@ -3947,13 +3805,8 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
     // ==================== Helper Methods ====================
 
 
-    /**
-     * Case-insensitive comparison for MariaDB result rows.
-     * MariaDB's default collation (utf8mb4_uca1400_ai_ci) is case-insensitive,
-     * so rows that differ only in case variants (e.g., "B5NX" vs "b5nx") are
-     * semantically equivalent. When ORDER BY columns have collation-equal values,
-     * the DB may non-deterministically return any matching case variant.
-     */
+    // Element-wise case-insensitive equality check for sorted result lists.
+    // MariaDB's default collation (utf8mb4_uca1400_ai_ci) is case-insensitive.
     private static boolean caseInsensitiveEquals(List<String> sorted1, List<String> sorted2) {
         if (sorted1.size() != sorted2.size()) return false;
         for (int i = 0; i < sorted1.size(); i++) {
@@ -3962,16 +3815,8 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         return true;
     }
 
-    /**
-     * Case-insensitive multiset comparison for MariaDB result rows.
-     * Handles the LIMIT boundary false positive (database14.log) where different
-     * execution plans pick different rows that have case-insensitive-equal ORDER BY
-     * values (e.g., "#y1-3wf" vs "#y1-3wF"). These rows sort differently in Java
-     * (case-sensitive compareTo) but are equal under MariaDB's case-insensitive
-     * collation, so the DB may non-deterministically choose either one at the LIMIT
-     * boundary. If all rows from one set can be matched case-insensitively to rows
-     * in the other set, the results are considered equivalent.
-     */
+    // Multiset case-insensitive equality — handles LIMIT boundary false positives where
+    // different plans pick different case-variants of collation-equal ORDER BY values.
     private static boolean caseInsensitiveSetEquals(List<String> sorted1, List<String> sorted2) {
         if (sorted1.size() != sorted2.size()) return false;
         List<String> remaining = new ArrayList<>(sorted2);
@@ -3989,12 +3834,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         return remaining.isEmpty();
     }
 
-    /**
-     * PAD SPACE comparison for MariaDB result rows.
-     * MariaDB's default PAD SPACE collation treats trailing spaces as insignificant
-     * (e.g., '' == ' ', 'abc' == 'abc '). When rows differ only in trailing spaces,
-     * they are semantically equivalent under this collation.
-     */
+    // Element-wise PAD SPACE equality: MariaDB ignores trailing spaces ('' == ' ').
     private static boolean padSpaceEquals(List<String> sorted1, List<String> sorted2) {
         if (sorted1.size() != sorted2.size()) return false;
         for (int i = 0; i < sorted1.size(); i++) {
@@ -4007,15 +3847,8 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         return true;
     }
 
-    /**
-     * PAD SPACE multiset comparison for MariaDB result rows.
-     * Handles the LIMIT boundary false positive (database3.log) where different
-     * execution plans pick different rows that are PAD SPACE equivalent (e.g.,
-     * '' vs ' '). Under MariaDB's default PAD SPACE collation, these values sort
-     * identically, so the DB may non-deterministically choose either one at the
-     * LIMIT boundary. If all rows from one set can be matched to rows in the other
-     * set after stripping trailing spaces, the results are considered equivalent.
-     */
+    // Multiset PAD SPACE equality — handles LIMIT boundary false positives where
+    // different plans pick rows that differ only in trailing spaces.
     private static boolean padSpaceSetEquals(List<String> sorted1, List<String> sorted2) {
         if (sorted1.size() != sorted2.size()) return false;
         List<String> remaining = new ArrayList<>(sorted2);
@@ -4040,10 +3873,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         return remaining.isEmpty();
     }
 
-    /**
-     * Java 8 compatible version of String.stripTrailing().
-     * Removes trailing whitespace characters from the given string.
-     */
+    // Java 8 compatible String.stripTrailing().
     private static String stripTrailing(String s) {
         if (s == null) return null;
         int end = s.length();
@@ -4092,20 +3922,10 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         globalState.getState().logStatement(message);
     }
 
-    /**
-     * [FIX] Check if the target index is effectively used in the EXPLAIN plan
-     * (not just listed as a possible key but actually chosen).
-     * Effective index access types: ref, range, const, eq_ref, ref_or_null,
-     * unique_subquery, index_subquery, index (full index scan).
-     */
     // ==================== Phase D1: Index-Friendly Tables ====================
 
-    /**
-     * Create dedicated index-friendly tables (idx_t0, idx_t1, idx_t2) with
-     * pre-built indexes and diverse column types for reliable index testing.
-     * These tables have predictable structure, indexes, and sufficient data,
-     * reducing reliance on randomly-generated tables.
-     */
+    // Creates dedicated idx_t0/t1/t2 tables with pre-built indexes and diverse column types
+    // for reliable index testing, reducing reliance on randomly-generated tables.
     private void createIndexFriendlyTables() {
         if (indexFriendlyCreated) return;
 
@@ -4223,10 +4043,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
 
     // ==================== Phase D2: Index Signature Deduplication ====================
 
-    /**
-     * Collect signatures of existing indexes to avoid creating duplicate indexes.
-     * A signature is tableName:columnName1,columnName2 (with optional UNIQUE prefix).
-     */
+    // Returns signatures of existing indexes (format: "tableName:[U:]col1,col2") for dedup.
     private Set<String> collectExistingIndexSignatures() {
         Set<String> sigs = new HashSet<>();
         try {
@@ -4243,10 +4060,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         return sigs;
     }
 
-    /**
-     * Check if we should skip index creation due to too many existing indexes
-     * or duplicate signatures. Returns true if index creation should proceed.
-     */
+    // Returns true if index creation should proceed (no duplicate signature, under the 15-index cap).
     private boolean shouldCreateIndex(Set<String> existingSigs, String tableName, List<String> colNames, boolean unique) {
         StringBuilder sig = new StringBuilder();
         sig.append(tableName).append(":");
@@ -4259,11 +4073,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
 
     // ==================== Phase D6: Type-Aware Data Insertion ====================
 
-    /**
-     * Insert type-aware data into a table. Generates values appropriate for each
-     * column type rather than relying on all-NULL defaults.
-     * Target: ~rowsPerTable rows of diverse, index-testable data.
-     */
+    // Inserts type-appropriate data (avoids all-NULL defaults). Batches 10 rows per INSERT.
     private void insertTypeAwareData(String tableName, int tableType, int targetRows) {
         ExpectedErrors insertErrors = new ExpectedErrors();
         insertErrors.add("Duplicate");
@@ -4306,10 +4116,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         }
     }
 
-    /**
-     * Generate a random SQL literal appropriate for the given column type.
-     * Produces values within reasonable ranges for effective index testing.
-     */
+    // Returns a random SQL literal for INT/DOUBLE/VARCHAR within index-testable ranges.
     private String generateRandomValueForType(String type, Randomly r) {
         switch (type.toUpperCase()) {
         case "INT":
@@ -4338,12 +4145,8 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
 
     // ==================== Mode 29: Functional Index (Phase G) ====================
 
-    /**
-     * Test functional indexes (via generated/computed columns) in MariaDB.
-     * MariaDB doesn't support MySQL 8.0's CREATE INDEX idx ON t ((expr)) syntax.
-     * Instead, we create a STORED generated column and index it.
-     * Tests: LOWER(), UPPER(), TRIM(), REVERSE() on VARCHAR columns.
-     */
+    // Tests functional indexes via STORED generated columns (MariaDB lacks MySQL 8.0's
+    // CREATE INDEX ... ((expr)) syntax). Uses LOWER/TRIM/SUBSTRING/CONCAT.
     private void checkFunctionalIndex() throws Exception {
         MariaDBSchema schema = globalState.getSchema();
         List<MariaDBTable> tables = schema.getDatabaseTables();
@@ -4486,11 +4289,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
 
     // ==================== Mode 30: DML + Index Consistency (Phase G) ====================
 
-    /**
-     * Test that DML operations (INSERT/UPDATE/DELETE) maintain index consistency.
-     * Compares query results before and after a DML operation to verify
-     * that index-based queries reflect the data changes correctly.
-     */
+    // Verifies that INSERT/UPDATE/DELETE maintain index consistency (COUNT stays deterministic).
     private void checkDMLIndexConsistency() throws Exception {
         MariaDBSchema schema = globalState.getSchema();
         List<MariaDBTable> tables = schema.getDatabaseTables();
@@ -4647,11 +4446,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
 
     // ==================== Mode 31: DESC Index Sort (Phase G) ====================
 
-    /**
-     * Test DESC index sort order correctness.
-     * Creates a DESC index and verifies that ORDER BY col DESC produces
-     * identical results whether using the DESC index or doing a filesort.
-     */
+    // Verifies DESC index produces identical ORDER BY results vs filesort (IGNORE INDEX).
     private void checkDescIndexSort() throws Exception {
         MariaDBSchema schema = globalState.getSchema();
         List<MariaDBTable> tables = schema.getDatabaseTables();
@@ -4796,13 +4591,8 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
 
     // ==================== Phase D6: Periodic Index Pruning ====================
 
-    /**
-     * Prune excess non-primary indexes from tables that exceed INDEX_PRUNE_THRESHOLD.
-     * Prevents "Too many keys specified; max 64 keys allowed" errors by proactively
-     * dropping old indexes when tables accumulate too many.
-     * Strategy: use INNODB_SYS_INDEXES.INDEX_ID (monotonically increasing) to
-     * identify the oldest indexes and drop them first, keeping the newest ~30.
-     */
+    // Drops oldest non-PK indexes when a table exceeds INDEX_PRUNE_THRESHOLD.
+    // Uses INNODB_SYS_INDEXES.INDEX_ID (monotonically increasing) to identify oldest first.
     private void pruneExcessIndexes() {
         ExpectedErrors dropErrors = new ExpectedErrors();
         dropErrors.add("Can't DROP");
@@ -4871,13 +4661,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         }
     }
 
-    /**
-     * Check if a table actually exists in the database by querying
-     * information_schema.TABLES. During long fuzzing sessions, tables
-     * may be dropped by various DDL operations (TRUNCATE on Aria tables,
-     * DROP TABLE, etc.), causing the Java-side schema to become stale.
-     * @return true if the table exists, false otherwise
-     */
+    // Queries information_schema to verify the table still exists (Java schema can become stale).
     private boolean tableExistsInDatabase(String tableName) {
         try (Statement s = globalState.getConnection().createStatement()) {
             try (ResultSet rs = s.executeQuery(
@@ -4890,9 +4674,6 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         }
     }
 
-    /**
-     * Count non-primary indexes on a table.
-     */
     private int getNonPrimaryIndexCount(MariaDBTable table) {
         int count = 0;
         for (MariaDBIndex idx : table.getIndexes()) {
@@ -5071,9 +4852,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         }
     }
 
-    /**
-     * Helper for Variant 0: DROP COLUMN + index integrity verification.
-     */
+    // Variant 0: verifies COUNT(*) before/after DROP COLUMN and checks table integrity.
     private void checkDropColumn(String tblName, String colName, String idxName) throws Exception {
         String queryBefore = "SELECT COUNT(*) FROM " + tblName + " WHERE " + colName + " IS NOT NULL;";
         lastQueryString = "[DROP_COL_IDX] " + queryBefore;
@@ -5101,11 +4880,8 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         checkTableIntegrity(tblName);
     }
 
-    /**
-     * Returns a safe widening target SQL type for MODIFY/CHANGE COLUMN operations.
-     * Only widening conversions are returned to avoid data truncation or out-of-range errors.
-     * Returns null if no safe widening target exists for the given type.
-     */
+    // Returns a safe widening SQL type (INT→BIGINT/DOUBLE, VARCHAR→VARCHAR(255)/TEXT, etc.)
+    // to avoid truncation/out-of-range errors during MODIFY/CHANGE COLUMN.
     private String getSafeWideningType(MariaDBSchema.MariaDBDataType currentType) {
         switch (currentType) {
         case INT: return Randomly.fromOptions("BIGINT", "DOUBLE");
@@ -5116,9 +4892,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         }
     }
 
-    /**
-     * Run CHECK TABLE EXTENDED to verify index/table integrity after DDL operations.
-     */
+    // Runs CHECK TABLE EXTENDED; logs any errors (does not throw).
     private void checkTableIntegrity(String tableName) {
         try {
             Statement stmt = globalState.getConnection().createStatement();
@@ -5272,12 +5046,7 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         compareResultsSorted(r1, r2, forceQ, "MARIADB_GEN_COL_IDX");
     }
 
-    /**
-     * Get the set of VIRTUAL generated column names for a table.
-     * MariaDB does not allow indexes on VIRTUAL generated columns
-     * (only STORED generated columns can be indexed).
-     * Queries information_schema.COLUMNS where EXTRA = 'VIRTUAL_GENERATED'.
-     */
+    // Returns VIRTUAL generated column names. MariaDB only allows indexes on STORED generated columns.
     private Set<String> getVirtualGeneratedColumns(String tableName) {
         Set<String> virtualCols = new HashSet<>();
         try {
@@ -5502,6 +5271,8 @@ public class MariaDBIndexOracle implements TestOracle<MariaDBGlobalState> {
         compareResultsSorted(r1, r2, queryA, modeTag);
     }
 
+    // Returns true if the index is actually chosen by the optimizer (not just a candidate).
+    // Effective access types: ref, range, const, eq_ref, ref_or_null, unique_subquery, index_subquery, index.
     private boolean isIndexEffectivelyUsed(List<String> plan, String targetIndex) {
         Set<String> effectiveTypes = new HashSet<>(Arrays.asList(
                 "ref", "range", "const", "eq_ref", "ref_or_null",

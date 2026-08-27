@@ -36,19 +36,43 @@ import idxdiff.tidb.visitor.TiDBVisitor;
  * TiDB Index Oracle — uses TiDB-specific optimizer hints to test index-related
  * plan consistency.
  *
- * Test modes:
+ * Active test modes:
  *   0: CREATE_INDEX_CONSISTENCY — query before/after index creation
  *   1: DROP_INDEX_CONSISTENCY — query before/after index drop
  *   2: USE_INDEX_HINT — USE_INDEX hint vs default
  *   3: IGNORE_INDEX_HINT — IGNORE_INDEX hint vs default
- *   4: HASH_JOIN_VS_MERGE_JOIN — compare join strategies
+ *   4: HASH_JOIN_VS_MERGE_JOIN [DISABLED]
  *   5: INDEX_MERGE_VS_DEFAULT — USE_INDEX_MERGE vs default
- *   6: AGGREGATE_INDEX_HINT — aggregate with different index hints
+ *   6: AGGREGATE_INDEX_HINT [DISABLED]
  *   7: JOIN_INDEX_SELECTION — join with forced index on each table
  *   8: MULTI_INDEX_CREATE — create multiple indexes, compare plans
- *   9: ORDER_BY_INDEX_SORT — ORDER BY with different agg strategies
- *  10: HINT_CONSISTENCY — USE_INDEX vs IGNORE_INDEX comparison
- *  11: STREAM_AGG_VS_HASH_AGG — compare aggregation strategies
+ *   9: ORDER_BY_INDEX_SORT [DISABLED]
+ *  10: HINT_CONSISTENCY [DISABLED]
+ *  11: STREAM_AGG_VS_HASH_AGG [DISABLED]
+ *  12: ADMIN_CHECK_TABLE — ADMIN CHECK TABLE after index operations
+ *  13: UNIQUE_INDEX_CONSISTENCY — UNIQUE index data consistency
+ *  14: PREFIX_INDEX — prefix index on VARCHAR, compare results
+ *  15: COVERING_INDEX — index-only scan verification
+ *  16: ORDER_BY_LIMIT_INDEX — ORDER BY + LIMIT with index vs filesort
+ *  17: RANGE_BOUNDARY — range scan boundary correctness
+ *  18: TIFLASH_VS_TIKV — TiFlash vs TiKV storage engine comparison
+ *  19: EXPRESSION_INDEX — expression index correctness
+ *  20: ICP_CONSISTENCY (variant A) [DISABLED]
+ *  21: ICP_CONSISTENCY (variant B) [DISABLED]
+ *  22: SQL_SEMANTIC_EQUIVALENCE — equivalent rewrites produce same results
+ *  23: DETERMINISTIC_INDEX_QUERY — deterministic queries with index hints
+ *  24: NULL_INDEX_HANDLING — NULL values in indexed columns
+ *  25: SUBQUERY_INDEX — subquery with index conditions
+ *  26: INDEX_MERGE_ENHANCED — enhanced index merge with data-aware values
+ *  27: LOOSE_INDEX_SCAN — loose index scan on GROUP BY
+ *  28: DML_INDEX_CONSISTENCY — DML operations maintain index consistency
+ *  29: GENERATED_COLUMN_INDEX — generated column index
+ *  30: AGGREGATE_INDEX — aggregate query with index
+ *  31: DESC_INDEX_SORT — DESC index sort order correctness
+ *  32: DROP_COLUMN_INDEX — DROP COLUMN with dependent index
+ *  33: COLLATION_INDEX — collation-dependent index behavior
+ *  34: IMPLICIT_TYPE_CONVERSION_INDEX — implicit type conversion in indexed comparisons
+ *  35: COMPLEX_INDEX_QUERY — complex multi-index + deep expression query
  */
 public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
 
@@ -60,14 +84,8 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
     // Flag: set to true when assertResultSorted/Strict filters out a result difference
     private boolean lastCompareFiltered = false;
 
-    /**
-     * Result wrapper for exec() — distinguishes between query success and expected error.
-     *
-     * Previously, exec() returned null for ALL errors, so when one query succeeded
-     * and the other hit an expected error, the asymmetry was silently discarded.
-     * ExecResult lets compareQueries() detect asymmetric success/failure,
-     * which may indicate optimizer bugs (e.g., one plan crashes while the other succeeds).
-     */
+    // Distinguishes between success and expected error, so compareQueries() can detect
+    // asymmetric success/failure (one plan crashes while the other succeeds — may indicate a bug).
     private static class ExecResult {
         static final int SUCCESS = 0;
         static final int EXPECTED_ERROR = 1;
@@ -89,21 +107,21 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         }
     }
 
-    // [P0-1] Index metadata cache — avoids per-query information_schema lookups
+    Index metadata cache — avoids per-query information_schema lookups
     private Map<String, List<TiDBColumn>> indexedColumnsCache = new HashMap<>();
     private Map<String, List<List<TiDBColumn>>> compositeIndexCache = new HashMap<>();
     private boolean indexCacheValid = false;
 
-    // [P0-2] ANALYZE TABLE batching — only analyze every N checks
+    ANALYZE TABLE batching — only analyze every N checks
     private int checksSinceLastAnalyze = 0;
     private static final int ANALYZE_INTERVAL = 20;
     // Track which tables need ANALYZE after DDL changes
     private Set<String> tablesNeedingAnalyze = new HashSet<>();
 
-    // [P0-5] Column value sampling cache — refreshed each check() call
+    Column value sampling cache — refreshed each check() call
     private Map<String, List<String>> columnValueCache = new HashMap<>();
 
-    // [P1] Statistics tracking — monitors oracle mode effectiveness
+    Statistics tracking — monitors oracle mode effectiveness
     private java.util.Map<String, java.util.concurrent.atomic.AtomicInteger> modeStats = new java.util.HashMap<>();
     private java.util.Map<String, java.util.concurrent.atomic.AtomicInteger> modeBugStats = new java.util.HashMap<>();
     private int checkCount = 0;
@@ -179,15 +197,15 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
     public void check() throws Exception {
         ensureSufficientData();
 
-        // [P0-2] Batched ANALYZE TABLE — only analyze every N checks
+        Batched ANALYZE TABLE — only analyze every N checks
         checksSinceLastAnalyze++;
         if (checksSinceLastAnalyze >= ANALYZE_INTERVAL) {
             analyzeAllTables();
-            invalidateIndexCache(); // [P0-1] Refresh cache after ANALYZE
+            invalidateIndexCache(); Refresh cache after ANALYZE
             checksSinceLastAnalyze = 0;
         }
 
-        // [P0-5] Clear column value cache each check
+        Clear column value cache each check
         columnValueCache.clear();
 
         try {
@@ -204,17 +222,17 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
                 13, 13,     // Unique Index Consistency
                 // DEPRECATED: 20, 20, (optimizer switch pairwise — not index-related)
                 24, 24,     // NULL Index Handling
-                25, 25,     // [P0-3] Subquery + Index
-                26, 26,     // [P0-4] Enhanced Index Merge
-                27, 27,        // [P1-2] Loose Index Scan
-                28, 28,     // [P0-1] DML + Index Consistency
-                29, 29,     // [P0-2] Generated Column + Index
-                30, 30,     // [P1] Aggregate + Index
-                31, 31,     // [P1] DESC Index Sort
-                32, 32,     // [P1] DROP COLUMN + Index
-                33, 33,     // [P1] Collation + Index
-                34, 34,     // [P1] Implicit Type Conversion + Index
-                35, 35,     // [P1] Complex AST Query + Index Hints (uses generateComplexQuery)
+                25, 25,     Subquery + Index
+                26, 26,     Enhanced Index Merge
+                27, 27,        Loose Index Scan
+                28, 28,     DML + Index Consistency
+                29, 29,     Generated Column + Index
+                30, 30,     Aggregate + Index
+                31, 31,     DESC Index Sort
+                32, 32,     DROP COLUMN + Index
+                33, 33,     Collation + Index
+                34, 34,     Implicit Type Conversion + Index
+                35, 35,     Complex AST Query + Index Hints (uses generateComplexQuery)
                 // === NORMAL WEIGHT (1x): Mature/stable features ===
                 0, 1, 2, 3, 7, 8, 8, 12
                 // DEPRECATED: 4 (checkHashJoinVsMergeJoin), 11 (checkStreamAggVsHashAgg)
@@ -246,23 +264,23 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
             // DEPRECATED: case 20/21 checkICPConsistency() — not index-related (tests optimizer switch consistency)
             // case 20: checkICPConsistency(); break;
             // case 21: checkICPConsistency(); break;
-            case 22: checkSQLSemanticEquivalence(); break;   // P3-C: SQL semantic equivalence
-            case 23: checkDeterministicIndexQuery(); break;  // P4: Deterministic index query
+            case 22: checkSQLSemanticEquivalence(); break;   SQL semantic equivalence
+            case 23: checkDeterministicIndexQuery(); break;  Deterministic index query
             case 24: checkNullIndexHandling(); break;       // NULL index handling
-            case 25: checkSubqueryIndex(); break;           // [P0-3] Subquery + Index
-            case 26: checkIndexMergeEnhanced(); break;      // [P0-4] Enhanced Index Merge
-            case 27: checkLooseIndexScan(); break;          // [P1-2] Loose Index Scan
-            case 28: checkDMLIndexConsistency(); break;     // [P0-1] DML + Index Consistency
-            case 29: checkGeneratedColumnIndex(); break;    // [P0-2] Generated Column + Index
-            case 30: checkAggregateIndex(); break;          // [P1] Aggregate + Index
-            case 31: checkDescIndexSort(); break;           // [P1] DESC Index Sort
-            case 32: checkDropColumnIndex(); break;         // [P1] DROP COLUMN + Index
-            case 33: checkCollationIndex(); break;          // [P1] Collation + Index
-            case 34: checkImplicitTypeConversionIndex(); break; // [P1] Implicit Type Conversion + Index
-            case 35: checkComplexIndexQuery(); break;           // [P0] Complex multi-index + deep expression query
+            case 25: checkSubqueryIndex(); break;           Subquery + Index
+            case 26: checkIndexMergeEnhanced(); break;      Enhanced Index Merge
+            case 27: checkLooseIndexScan(); break;          Loose Index Scan
+            case 28: checkDMLIndexConsistency(); break;     DML + Index Consistency
+            case 29: checkGeneratedColumnIndex(); break;    Generated Column + Index
+            case 30: checkAggregateIndex(); break;          Aggregate + Index
+            case 31: checkDescIndexSort(); break;           DESC Index Sort
+            case 32: checkDropColumnIndex(); break;         DROP COLUMN + Index
+            case 33: checkCollationIndex(); break;          Collation + Index
+            case 34: checkImplicitTypeConversionIndex(); break; Implicit Type Conversion + Index
+            case 35: checkComplexIndexQuery(); break;           Complex multi-index + deep expression query
             }
 
-            // [P1] Statistics tracking
+            Statistics tracking
             trackMode(mode);
         } catch (NullPointerException e) {
             throw new IgnoreMeException();
@@ -271,22 +289,9 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
 
     // ==================== P0: Data-Aware Value Sampling ====================
 
-    /**
-     * Sample actual values from a table column to use in WHERE conditions.
-     * This ensures queries match real data instead of using random values that
-     * likely produce empty result sets.
-     *
-     * Note: Uses catch(Throwable) instead of catch(Exception) because TiDB's
-     * Cascades planner has a known nil pointer dereference bug triggered by
-     * "ORDER BY RAND() LIMIT" on virtual generated columns. This causes
-     * SQLQueryAdapter.checkException() to throw AssertionError (which is NOT
-     * a subclass of Exception), polluting fuzz logs with the same known bug.
-     * By catching Throwable here, only the sampling infrastructure is silenced;
-     * actual test oracle queries via exec() remain unaffected — new nil pointer
-     * bugs from other root causes will still be reported. Once the TiDB bug is
-     * fixed, this can be reverted to catch(Exception).
-     * See: min_tidb_db67_virtual_col_cascades_bug.sql / min_tidb_db70_cascade_rand_nilptr.sql
-     */
+    // catch(Throwable) not catch(Exception): TiDB's Cascades planner throws AssertionError
+    // (not Exception) from "ORDER BY RAND() LIMIT" on virtual generated columns — see
+    // min_tidb_db67_virtual_col_cascades_bug.sql. Revert to catch(Exception) once fixed.
     private List<String> sampleColumnValues(String tableName, String colName, int limit) {
         try {
             String query = "SELECT " + colName + " FROM " + tableName
@@ -297,13 +302,8 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         }
     }
 
-    /**
-     * Quote a sampled value for safe embedding in a SQL string.
-     * String types (CHAR/VARCHAR/TEXT/BLOB) get single-quote wrapping with escaping.
-     * Numeric types are returned as-is (they are safe numeric strings from JDBC).
-     * This prevents syntax errors when sampled values contain special characters
-     * like '?', '\'', etc.
-     */
+    // Numeric types returned as-is (JDBC provides unquoted numeric strings).
+    // String/date types get single-quote wrapping with escaping to handle special chars.
     private String quoteValueForSQL(String rawValue, TiDBColumn col) {
         if (rawValue == null) return "NULL";
         String typeName = col.getType().toString().toUpperCase();
@@ -321,12 +321,8 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
 
     // ==================== P0: Indexable Table/Column Helpers ====================
 
-    /**
-     * Get a random table that is suitable for index creation.
-     * Prioritizes index-friendly tables (idx_t0, idx_t1, etc.) which only have
-     * index-safe column types (INT, VARCHAR). Falls back to filtering all tables
-     * for those that have at least 2 indexable (non-TEXT/BLOB/JSON) columns.
-     */
+    // Prioritizes idx_t* tables (index-safe INT/VARCHAR only); falls back to tables
+    // with at least 2 indexable (non-TEXT/BLOB/JSON) columns.
     private TiDBTable getRandomIndexableTable() {
         TiDBSchema schema = globalState.getSchema();
         List<TiDBTable> tables = schema.getDatabaseTables();
@@ -357,10 +353,6 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         return null;
     }
 
-    /**
-     * Filter out columns that cannot be indexed (TEXT, BLOB, JSON types).
-     * Returns only columns safe for CREATE INDEX.
-     */
     private List<TiDBColumn> getIndexableColumns(TiDBTable table) {
         List<TiDBColumn> result = new ArrayList<>();
         for (TiDBColumn col : table.getColumns()) {
@@ -596,11 +588,8 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         }
     }
 
-    /**
-     * P4#7-legacy: Original INL_JOIN test (preserved for backward compatibility).
-     * Fix: Extract actual table names from the generated query to ensure INL_JOIN hint
-     * references the tables actually present in the query.
-     */
+    // Fix: extracts actual table names to ensure INL_JOIN hint references the tables
+    // present in the query (not some other table from the schema).
     private void checkJoinIndexSelectionLegacy(List<TiDBTable> allTables) throws Exception {
         if (allTables.size() < 2) return;
         // Fix: pick two tables first, build the query from them, use their names in hint
@@ -628,11 +617,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         assertResultSorted(r1, r2, queryString, "TIDB_JOIN_INDEX");
     }
 
-    /**
-     * P4#7-new: Index-aware JOIN — uses generateIndexFriendlyJoinClauses for ON conditions
-     * targeting indexed columns, and adds WHERE conditions using sampled values.
-     * Tests that optimizer correctly uses indexes for both JOIN and filter conditions.
-     */
+    // Tests optimizer index usage for both JOIN ON conditions and WHERE filter conditions.
     private void checkJoinIndexSelectionIndexAware(List<TiDBTable> allTables) throws Exception {
         // Pick two tables with indexes
         List<TiDBTable> tablesWithIndexes = new ArrayList<>();
@@ -728,11 +713,8 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         if (lastCompareFiltered) { countStarFallback(queryString, inlQuery, "TIDB_JOIN_IDX_AWARE"); }
     }
 
-    /**
-     * P4#7-new: Compare SortMergeJoin vs IndexNestedLoopJoin results.
-     * These two join strategies handle duplicate keys and NULL values differently,
-     * making this comparison effective at exposing join-related index bugs.
-     */
+    // SortMergeJoin and IndexNestedLoopJoin handle duplicate keys and NULLs differently —
+    // comparing them exposes join-related index bugs.
     private void checkJoinIndexSelectionMergeVsINL(List<TiDBTable> allTables) throws Exception {
         if (allTables.size() < 2) return;
         List<TiDBTable> shuffled = new ArrayList<>(allTables);
@@ -896,11 +878,8 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
 
     // ==================== Mode 12: ADMIN CHECK TABLE ====================
 
-    /**
-     * Run ADMIN CHECK TABLE after creating indexes to detect data inconsistency.
-     * Targets TiDB bugs: #61612 (ADMIN CHECK TABLE false success),
-     * #60339 (ADD UNIQUE INDEX data inconsistency).
-     */
+    // Targets TiDB bugs: #61612 (ADMIN CHECK TABLE false success),
+    // #60339 (ADD UNIQUE INDEX data inconsistency).
     private void checkAdminCheckTable() throws Exception {
         TiDBSchema schema = globalState.getSchema();
         List<TiDBTable> tables = schema.getDatabaseTables();
@@ -944,11 +923,8 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
 
     // ==================== Mode 13: UNIQUE INDEX Consistency ====================
 
-    /**
-     * Create a UNIQUE INDEX and verify data consistency.
-     * Targets TiDB bugs: #60339 (ADD UNIQUE INDEX data inconsistency),
-     * #61255 (multi-index data inconsistency).
-     */
+    // Targets TiDB bugs: #60339 (ADD UNIQUE INDEX data inconsistency),
+    // #61255 (multi-index data inconsistency).
     private void checkUniqueIndexConsistency() throws Exception {
         // P0: Use indexable table (prioritize idx_t* tables, filter out BLOB/TEXT)
         TiDBTable table = getRandomIndexableTable();
@@ -1183,11 +1159,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
 
     // ==================== AST-Based Query Generation (Priority 1) ====================
 
-    /**
-     * Generate a complex SELECT using TiDBExpressionGenerator.
-     * Produces deeply nested expressions with functions, comparisons, CASE WHEN, etc.
-     * Falls back to simple string-based query if AST generation fails.
-     */
+    // Falls back to simple string-based query if AST generation fails.
     private String generateComplexQuery() {
         TiDBSchema schema = globalState.getSchema();
         if (schema.getDatabaseTables().isEmpty()) return "SELECT 1;";
@@ -1263,11 +1235,8 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
 
     // ==================== Index-Aware WHERE Generation (Priority 2) ====================
 
-    /**
-     * P0: Query actual index columns from information_schema.STATISTICS.
-     * Returns a list of columns that are covered by non-PRIMARY indexes.
-     * This ensures WHERE conditions target indexed columns, making hints meaningful.
-     */
+    // Queries information_schema.STATISTICS (not the schema model) to get actual
+    // non-PRIMARY indexed columns, so hints are more likely to change the plan.
     private List<TiDBColumn> getIndexedColumnsForTable(TiDBTable table) {
         List<TiDBColumn> indexedCols = new ArrayList<>();
         try {
@@ -1291,10 +1260,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         return indexedCols;
     }
 
-    /**
-     * P0: Get composite index column groups from information_schema.
-     * Returns groups of columns that belong to the same composite index, ordered by SEQ_IN_INDEX.
-     */
+    // Groups columns by composite index from information_schema, ordered by SEQ_IN_INDEX.
     private List<List<TiDBColumn>> getCompositeIndexGroups(TiDBTable table) {
         Map<String, List<TiDBColumn>> indexGroups = new java.util.LinkedHashMap<>();
         try {
@@ -1325,11 +1291,8 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         return compositeGroups;
     }
 
-    /**
-     * Generate WHERE conditions that are more likely to use indexes.
-     * P0: Now analyzes actual index columns to ensure conditions target indexed columns.
-     * Strategies: equality, range, IN list, multi-column, composite prefix, index merge.
-     */
+    // Strategies: equality, range, IN list, multi-column, composite prefix (≤4 cols), index merge.
+    // Reads actual indexed columns via information_schema so conditions hit real index paths.
     private TiDBExpression generateIndexAwareWhere(TiDBTable table, List<TiDBColumn> columns) {
         if (columns.isEmpty()) return null;
 
@@ -1461,10 +1424,6 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         }
     }
 
-    /**
-     * P1: Generate a random constant that matches the column's type.
-     * INT columns get int constants, VARCHAR columns get string constants, etc.
-     */
     private TiDBConstant generateTypeAwareConstant(TiDBColumn col) {
         String typeName = col.getType().toString().toUpperCase();
         Randomly r = globalState.getRandomly();
@@ -1479,11 +1438,8 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         }
     }
 
-    /**
-     * P0: Generate a data-aware constant — tries to sample real values from the table.
-     * Falls back to random constant if sampling fails or returns no data.
-     * This significantly improves query hit rate for index testing.
-     */
+    // Tries to sample real values from the table (60% chance); falls back to random.
+    // Sampling real values significantly improves query hit rate for index testing.
     private TiDBConstant generateDataAwareConstant(TiDBTable table, TiDBColumn col) {
         // 60% chance: try to use a sampled value from actual table data
         if (!Randomly.getBooleanWithRatherLowProbability()) {
@@ -1498,10 +1454,6 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         return generateTypeAwareConstant(col);
     }
 
-    /**
-     * Parse a sampled value string (from executeQuery) into a TiDBConstant.
-     * Handles INT (plain number), VARCHAR (quoted string), etc.
-     */
     private TiDBConstant parseSampledValueToConstant(String rawVal, TiDBColumn col) {
         String typeName = col.getType().toString().toUpperCase();
         if (typeName.contains("INT")) {
@@ -1540,11 +1492,8 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
 
     // ==================== P1#4: Query Generation Targeting Specific Index Columns ====================
 
-    /**
-     * P1#4 Fix: Generate a query whose WHERE condition specifically references the given columns.
-     * Used by Mode 2/3 to align WHERE condition with the hinted index's columns,
-     * increasing the chance that the hint actually changes the execution plan.
-     */
+    // Mode 2/3 fix: WHERE targets the hinted index's columns so USE_INDEX/IGNORE_INDEX
+    // is more likely to change the execution plan.
     private String generateQueryTargetingColumns(TiDBTable table, List<TiDBColumn> targetCols) {
         String tblName = table.getName();
         List<TiDBColumn> allCols = table.getColumns();
@@ -1595,11 +1544,6 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
 
     // ==================== Index-Aware Query Generation ====================
 
-    /**
-     * Generate a query that specifically targets columns of the given table,
-     * making it more likely to use the selected index.
-     * The WHERE clause references columns from the table, testing index scan paths.
-     */
     private String generateIndexAwareQuery(TiDBTable targetTable) {
         // 60% chance: use AST-based complex query with index-aware WHERE
         if (Randomly.fromOptions(true, true, true, false, false)) {
@@ -1899,10 +1843,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         return sb.toString();
     }
 
-    /**
-     * Generate a JOIN query between two specific tables with index-friendly WHERE conditions.
-     * Used by Mode 7 Legacy to ensure the INL_JOIN hint references tables actually in the query.
-     */
+    // Mode 7 legacy: ensures INL_JOIN hint references tables actually present in the query.
     private String generateIndexAwareJoinQuery(TiDBTable t1, TiDBTable t2) {
         List<TiDBColumn> cols1 = t1.getColumns();
         List<TiDBColumn> cols2 = t2.getColumns();
@@ -2001,10 +1942,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
 
     // ==================== Helpers ====================
 
-    /**
-     * Execute a query and return an ExecResult that distinguishes SUCCESS from EXPECTED_ERROR.
-     * Unexpected errors (not in the errors list) propagate as AssertionError — same as before.
-     */
+    // Unexpected errors (not in the errors list) propagate as AssertionError, same as before.
     private ExecResult execV2(String query) {
         try {
             List<String> rows = ComparatorHelper.getResultSetAllColumnsAsString(query, errors, globalState, " ||| ");
@@ -2018,10 +1956,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         }
     }
 
-    /**
-     * Legacy exec() — kept for non-comparison uses (sampling, etc.).
-     * Returns null on expected error, lets unexpected errors propagate.
-     */
+    // Legacy method retained for non-comparison uses (sampling, ADMIN CHECK, etc.).
     private List<String> exec(String query) {
         try {
             return ComparatorHelper.getResultSetAllColumnsAsString(query, errors, globalState, " ||| ");
@@ -2030,18 +1965,8 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         }
     }
 
-    /**
-     * Execute two queries and compare results. Detects asymmetric success/failure
-     * which may indicate optimizer bugs (e.g., one plan succeeds while the other
-     * hits an expected error).
-     *
-     * @param q1 first query (e.g., default plan)
-     * @param q2 second query (e.g., hinted plan)
-     * @param label short label for the test mode (e.g., "USE_INDEX")
-     * @param queryContext original query string for error messages
-     * @return true if comparison was performed, false if both hit expected errors
-     * @throws AssertionError if results differ or if asymmetric success/failure detected
-     */
+    // Detects asymmetric success/failure (one plan crashes, the other succeeds) as
+    // potential optimizer bugs. Returns false if both plans hit expected errors.
     private boolean compareQueries(String q1, String q2, String label, String queryContext) throws Exception {
         ExecResult r1 = execV2(q1);
         ExecResult r2 = execV2(q2);
@@ -2096,11 +2021,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         tablesNeedingAnalyze.clear();
     }
 
-    /**
-     * Analyze only a single table — used after DDL operations (CREATE INDEX, DROP INDEX)
-     * to update statistics for that specific table. Much faster than analyzeAllTables()
-     * when only one table was modified.
-     */
+    // Faster than analyzeAllTables() when only one table was modified by DDL.
     private void analyzeTable(String tableName) {
         ExpectedErrors analyzeErrors = new ExpectedErrors();
         analyzeErrors.add("doesn't exist");
@@ -2115,9 +2036,6 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         }
     }
 
-    /**
-     * Force-reload idxdiff's internal schema model from the live database.
-     */
     private void refreshSchema() {
         try {
             globalState.updateSchema();
@@ -2159,13 +2077,8 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         return null;
     }
 
-    /**
-     * Check if a query has LIMIT without ORDER BY.
-     * Such queries produce non-deterministic row selection under different plans,
-     * so comparing results is meaningless — this is expected SQL behavior, not a bug.
-     * Real bugs (wrong index scan results, incorrect join matching, etc.) will still
-     * be detected because they produce wrong VALUES even when ORDER BY is present.
-     */
+    // LIMIT without ORDER BY is non-deterministic across plans — expected SQL behavior.
+    // Real index bugs (wrong values, missing rows) still get caught when ORDER BY is present.
     private boolean hasLimitWithoutOrderBy(String query) {
         String upperQuery = query.toUpperCase();
         boolean hasLimit = upperQuery.contains("LIMIT");
@@ -2173,19 +2086,8 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         return hasLimit && !hasOrderBy;
     }
 
-    /**
-     * Detect non-deterministic GROUP BY: when GROUP BY expressions contain
-     * only constant values (no column references), TiDB collapses all rows
-     * into one group and picks arbitrary values for non-aggregated columns.
-     * Different execution plans may pick different rows → non-deterministic.
-     *
-     * Examples: GROUP BY NULL, GROUP BY (NULL XOR NULL), GROUP BY 1+2, etc.
-     *
-     * This does NOT mask real bugs because:
-     * - Real index bugs with proper GROUP BY (on columns) still get detected
-     * - Aggregate queries (COUNT, SUM, etc.) produce deterministic results regardless
-     * - Only non-aggregated columns in SELECT are affected, which is SQL-level behavior
-     */
+    // GROUP BY with only constants (GROUP BY NULL, 1+2, etc.) collapses all rows into
+    // one group; TiDB picks arbitrary non-aggregated column values → non-deterministic.
     private boolean hasNonDeterministicGroupBy(String query) {
         String upperQuery = query.toUpperCase();
         if (!upperQuery.contains("GROUP BY")) return false;
@@ -2214,12 +2116,8 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         return true;
     }
 
-    /**
-     * Detect when SELECT contains column references that are not in GROUP BY
-     * (and not inside aggregate functions). In MySQL/TiDB's non-strict mode,
-     * these columns return values from an arbitrary row in each group,
-     * making the result non-deterministic across different execution plans.
-     */
+    // In TiDB's non-strict mode, SELECT columns not in GROUP BY return an arbitrary
+    // row's value per group — non-deterministic across execution plans.
     private boolean hasNonGroupingSelectColumns(String query) {
         String upperQuery = query.toUpperCase();
         if (!upperQuery.contains("GROUP BY")) return false;
@@ -2299,7 +2197,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         return false;
     }
 
-    /** Extract the first column value from each row (rows are "col1 ||| col2 ||| ...") */
+    // Rows are delimited as "col1 ||| col2 ||| ..."; extract only the first column.
     private List<String> extractFirstColumn(List<String> rows) {
         List<String> result = new ArrayList<>();
         for (String row : rows) {
@@ -2403,11 +2301,8 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
 
     // ==================== P0: COUNT(*) Aggregate Fallback ====================
 
-    /**
-     * P0: When result comparison is filtered (LIMIT w/o ORDER BY, non-deterministic GROUP BY, etc.),
-     * use COUNT(*) as a deterministic fallback to still detect real index bugs.
-     * COUNT(*) is deterministic regardless of row ordering or LIMIT tie-breaking.
-     */
+    // When row comparison is filtered (LIMIT without ORDER BY, non-det GROUP BY, etc.),
+    // COUNT(*) is a deterministic fallback that still catches missing/extra-row bugs.
     private void countStarFallback(String queryA, String queryB, String mode) {
         aggregateFallbackUsed++;
         try {
@@ -2429,11 +2324,8 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         }
     }
 
-    /**
-     * Wrap a query in SELECT COUNT(*) FROM (original_query) AS subq.
-     * Strips trailing semicolons and removes top-level ORDER BY/LIMIT (not needed for COUNT).
-     * Uses backward search from the end to avoid accidentally stripping ORDER BY inside subqueries.
-     */
+    // Strips top-level ORDER BY/LIMIT using backward search to avoid stripping ORDER BY
+    // inside subqueries.
     private String wrapInCountStar(String query) {
         try {
             String q = query.trim();
@@ -2452,11 +2344,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         }
     }
 
-    /**
-     * Find the position of the last top-level "ORDER BY" in a SQL string.
-     * "Top-level" means not inside parentheses (i.e., not inside a subquery).
-     * Returns -1 if not found.
-     */
+    // "Top-level" means not inside parentheses (i.e., not inside a subquery); returns -1 if absent.
     private int findLastTopLevelOrderBy(String sql) {
         String upper = sql.toUpperCase();
         int depth = 0;
@@ -2474,25 +2362,9 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
 
     // ==================== Floating-Point Tolerance ====================
 
-    /**
-     * Check if two result lists are approximately equal considering floating-point
-     * rounding differences. For each pair of corresponding rows, if both can be
-     * parsed as doubles, compare with relative tolerance (1e-10). If either cannot
-     * be parsed as a double, the pair is NOT considered equal (falls back to exact
-     * string comparison by the caller).
-     * <p>
-     * This avoids false positives from floating-point accumulation order differences
-     * (e.g., SUM of many DOUBLE values via StreamAgg vs HashAgg) while still
-     * catching real bugs where results differ significantly. A relative tolerance
-     * of 1e-10 is tight enough that:
-     * <ul>
-     * <li>Integer COUNT(*) differences ("5" vs "6") are still caught (relDiff ~0.17)</li>
-     * <li>Wrong aggregation results (1000 vs 900) are still caught (relDiff ~0.1)</li>
-     * <li>NULL vs number is still caught (NumberFormatException → not equal)</li>
-     * <li>String value differences are still caught (NumberFormatException → not equal)</li>
-     * <li>Different row counts are still caught (size check fails first)</li>
-     * </ul>
-     */
+    // Relative tolerance 1e-10 avoids false positives from SUM accumulation order (StreamAgg
+    // vs HashAgg) while still catching COUNT(*) differences (relDiff ~0.17) and wrong values.
+    // Non-numeric strings fall through to exact comparison.
     private boolean resultsAlmostEqualDouble(List<String> r1, List<String> r2) {
         if (r1.size() != r2.size()) return false;
         for (int i = 0; i < r1.size(); i++) {
@@ -2522,11 +2394,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
 
     // ==================== P1: Tie-Breaker Detection ====================
 
-    /**
-     * Extract table names from the FROM clause of a query.
-     * Only considers tables that match idxdiff's naming convention (tN).
-     * Returns null if parsing fails (conservative: no unique tie-breaker).
-     */
+    // Only considers tN-pattern tables; returns null on failure (conservative: assumes no tie-breaker).
     private Set<String> extractFromTables(String queryString) {
         try {
             String upper = queryString.toUpperCase();
@@ -2577,8 +2445,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         }
     }
 
-    /** Check if ORDER BY includes a PRIMARY KEY column for deterministic sort.
-     *  TiDB uses base TableIndex without column info, so we only check primary keys. */
+    // TiDB's TableIndex doesn't expose column info, so tie-breaker check is PK-only.
     private boolean hasUniqueOrderByTieBreaker(String queryString) {
         try {
             String upperQuery = queryString.toUpperCase();
@@ -2654,10 +2521,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         }
     }
 
-    /**
-     * Runtime check: does the given column have any NULL values in the table?
-     * Returns true if NULL values exist (or on error, conservatively returns true).
-     */
+    // Conservatively returns true on query error (assumes nulls exist).
     private boolean columnHasNullValues(TiDBTable table, String columnName) {
         try {
             String checkQuery = "SELECT EXISTS(SELECT 1 FROM " + table.getName()
@@ -2670,7 +2534,6 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         }
     }
 
-    /** Compare two lists as multi-sets (ignoring order and duplicates) */
     private boolean areSetsEqual(List<String> list1, List<String> list2) {
         Map<String, Integer> freq1 = new HashMap<>();
         Map<String, Integer> freq2 = new HashMap<>();
@@ -2681,10 +2544,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
 
     // ==================== EXPLAIN Plan Verification ====================
 
-    /**
-     * Get the EXPLAIN plan for a query in TiDB.
-     * TiDB EXPLAIN returns: id, estRows, task, access_object, operator_info
-     */
+    // TiDB EXPLAIN columns: id | access_object | operator_info (estRows and task discarded).
     private List<String> getExplainPlan(String queryString) {
         List<String> plan = new ArrayList<>();
         try {
@@ -2704,10 +2564,6 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         return plan;
     }
 
-    /**
-     * Check if two TiDB EXPLAIN plans are different.
-     * Compares the operator tree structure and access objects.
-     */
     private boolean plansAreDifferent(List<String> plan1, List<String> plan2) {
         if (plan1.isEmpty() || plan2.isEmpty()) return true; // Can't verify, assume different
         if (plan1.size() != plan2.size()) return true;
@@ -2727,11 +2583,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         return false; // Plans are identical
     }
 
-    /**
-     * Collect a set of index signatures to detect duplicates.
-     * TiDB uses TableIndex (base class) which may not expose column names,
-     * so we use index name + table name as a proxy.
-     */
+    // TiDB's TableIndex may not expose column names; uses table:indexName as proxy.
     private Set<String> collectExistingIndexSignatures() {
         Set<String> sigs = new HashSet<>();
         try {
@@ -2746,17 +2598,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
 
     // ==================== Mode 14: Prefix Index (Enhanced) ====================
 
-    /**
-     * Mode 14: Prefix Index — enhanced with multiple prefix-specific query strategies.
-     *
-     * Strategies:
-     * 0: LIKE prefix match — col LIKE 'abc%' (prefix index optimal)
-     * 1: LEFT function — LEFT(col, N) = 'val' (tests prefix extraction)
-     * 2: SUBSTRING function — SUBSTRING(col, 1, N) = 'val' (tests substring optimization)
-     * 3: Range scan — col >= 'val' AND col < 'valx' (prefix boundary test)
-     * 4: Equality on sampled value — col = 'val' (basic prefix lookup)
-     * 5: COUNT(*) IS NOT NULL (original behavior, baseline)
-     */
+    // Mode 14: 0=LIKE prefix, 1=LEFT(), 2=SUBSTRING(), 3=range scan, 4=equality, 5=IS NOT NULL baseline.
     private void checkPrefixIndex() throws Exception {
         TiDBSchema schema = globalState.getSchema();
         List<TiDBTable> tables = schema.getDatabaseTables();
@@ -2880,10 +2722,6 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
 
     // ==================== Mode 15: Covering Index ====================
 
-    /**
-     * Create a multi-column index, SELECT only indexed columns.
-     * Compare IndexReader (covering) vs TableReader results.
-     */
     private void checkCoveringIndex() throws Exception {
         // P0: Use indexable table (prioritize idx_t* tables, filter out BLOB/TEXT)
         TiDBTable table = getRandomIndexableTable();
@@ -2947,10 +2785,6 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
 
     // ==================== Mode 16: ORDER BY + LIMIT Index ====================
 
-    /**
-     * Create an index, then run ORDER BY col LIMIT N.
-     * Compare IndexReader vs TableReader for correct top-N results.
-     */
     private void checkOrderByLimitIndex() throws Exception {
         // P0: Use indexable table (prioritize idx_t* tables, filter out BLOB/TEXT)
         TiDBTable table = getRandomIndexableTable();
@@ -3027,11 +2861,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
 
     // ==================== Mode 17: Range Boundary ====================
 
-    /**
-     * Test index scan boundary conditions.
-     * Queries with edge-case values: MIN, MAX, BETWEEN boundaries.
-     * Off-by-one errors in index range scans often miss boundary rows.
-     */
+    // Off-by-one errors in index range scans often miss boundary rows; tests MIN/MAX/BETWEEN edges.
     private void checkRangeBoundary() throws Exception {
         // P0: Use indexable table (prioritize idx_t* tables, filter out BLOB/TEXT)
         TiDBTable table = getRandomIndexableTable();
@@ -3110,11 +2940,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
 
     // ==================== Mode 18: READ_FROM_STORAGE(TIFLASH vs TIKV) ====================
 
-    /**
-     * P0: Compare TiFlash (columnar) vs TiKV (row) storage engine reads.
-     * TiDB's most unique feature — column store vs row store must produce
-     * identical results. Uses READ_FROM_STORAGE hint to force engine choice.
-     */
+    // TiDB: column store (TiFlash) vs row store (TiKV) must produce identical results; uses READ_FROM_STORAGE hint.
     private void checkTiFlashVsTiKV() throws Exception {
         TiDBSchema schema = globalState.getSchema();
         List<TiDBTable> tables = schema.getDatabaseTables();
@@ -3205,12 +3031,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
 
     // ==================== Mode 19: Expression Index ====================
 
-    /**
-     * P0: Test TiDB expression index (functional index).
-     * CREATE INDEX idx ON t((LOWER(col))) — indexes the result of an expression.
-     * TiDB supports this since v5.7? (MySQL 8.0 compatible syntax).
-     * Compare query results using expression index vs ignoring it.
-     */
+    // TiDB expression index: CREATE INDEX ON t((expr)); double parens required (MySQL 8.0 compat, since ~v5.7).
     private void checkExpressionIndex() throws Exception {
         TiDBSchema schema = globalState.getSchema();
         List<TiDBTable> tables = schema.getDatabaseTables();
@@ -3329,7 +3150,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         List<String> r1 = exec(baseQuery);
         if (r1 == null) return;
 
-        // [P1-1] Expanded optimizer switches — 21 switches covering join, index, subquery,
+        Expanded optimizer switches — 21 switches covering join, index, subquery,
         // agg, scan, and additional TiDB-specific optimizer paths.
         String setOff = Randomly.fromOptions(
                 // Join related
@@ -3482,9 +3303,6 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
 
     // ==================== Mode 23: Deterministic Index Query (P4) ====================
 
-    /**
-     * Find a primary key column for a TiDB table.
-     */
     private TiDBColumn getPrimaryKeyColumn(TiDBTable table) {
         for (TiDBColumn col : table.getColumns()) {
             if (col.isPrimaryKey()) return col;
@@ -3492,22 +3310,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         return null;
     }
 
-    /**
-     * Build a deterministic query targeting a specific non-PK index.
-     * Uses an indexed column for WHERE (so USE INDEX hint is meaningful)
-     * and PK column for ORDER BY (so results have deterministic order).
-     *
-     * FIX: Previous version used PK column in WHERE but hinted at non-PK indexes.
-     * The optimizer naturally uses PK index for PK column conditions, so
-     * plansAreDifferent() almost always returned false → mode never executed.
-     * Now uses indexed column in WHERE, making the USE INDEX hint impactful.
-     */
-    /**
-     * Build an AST-based deterministic query using TiDBExpressionGenerator.
-     * Generates complex WHERE conditions that reference the indexed column,
-     * ensuring the USE INDEX hint can influence the plan.
-     * Always includes ORDER BY PK for deterministic result ordering.
-     */
+    // FIX: WHERE on indexed col (not PK) makes USE_INDEX hint effective; PK-in-WHERE caused optimizer to always prefer PK index.
     private String buildDeterministicASTQuery(TiDBTable table, TiDBColumn pkCol,
             TableIndex targetIdx, TiDBColumn idxCol, String idxVal) {
         try {
@@ -3563,9 +3366,6 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         }
     }
 
-    /**
-     * Build a simple anchor condition on the indexed column.
-     */
     private TiDBExpression buildIndexAnchorCondition(TiDBColumn idxCol, String idxVal) {
         TiDBExpression colRef = new TiDBColumnReference(idxCol);
         TiDBExpression valConst = TiDBConstant.createStringConstant(idxVal);
@@ -3613,14 +3413,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         return query;
     }
 
-    /**
-     * P4: Deterministic Index Query — uses indexed columns in WHERE conditions
-     * (not PK columns), forces different index plans to expose optimizer/execution bugs.
-     * PK column is used in ORDER BY to guarantee deterministic result ordering.
-     *
-     * FIX: Previous version used PK in WHERE, which made USE INDEX(non-PK) hints
-     * ineffective (optimizer always prefers PK index for PK conditions).
-     */
+    // FIX: WHERE on indexed col (not PK); PK-in-WHERE made USE_INDEX(non-PK) ineffective (optimizer always picks PK index).
     private void checkDeterministicIndexQuery() throws Exception {
         TiDBSchema schema = globalState.getSchema();
         List<TiDBTable> tables = schema.getDatabaseTables();
@@ -3713,10 +3506,6 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         assertResultSorted(r1, r2, queryA, "TIDB_DET_IDX");
     }
 
-    /**
-     * Get columns covered by a specific index from information_schema.
-     * Returns empty list if the index is not found or has no columns.
-     */
     private List<TiDBColumn> getIndexColumnsFromSchema(TiDBTable table, String indexName) {
         List<TiDBColumn> cols = new ArrayList<>();
         try {
@@ -3743,17 +3532,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
 
     // ==================== Index-Friendly Infrastructure ====================
 
-    /**
-     * Create index-friendly tables with pre-built indexes and data.
-     * Adapted from Postgres' createIndexFriendlyTables() for TiDB syntax.
-     *
-     * TiDB differences from Postgres:
-     * - No INCLUDE (covering index) syntax
-     * - No partial index (WHERE clause) syntax
-     * - No expression index in CREATE INDEX (uses different syntax)
-     * - Uses MySQL-style INSERT IGNORE instead of ON CONFLICT DO NOTHING
-     * - Uses ANALYZE TABLE instead of ANALYZE
-     */
+    // TiDB vs Postgres: no INCLUDE/partial index/expression index in CREATE INDEX; INSERT IGNORE not ON CONFLICT; ANALYZE TABLE.
     private void createIndexFriendlyTables() {
         ExpectedErrors tableErrors = new ExpectedErrors();
         tableErrors.add("already exists");
@@ -3928,13 +3707,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         }
     }
 
-    /**
-     * Try to generate an index-friendly WHERE clause as a SQL string.
-     * Returns null if no suitable index found (caller should fall back to random WHERE).
-     *
-     * Adapted from Postgres' tryGenerateIndexFriendlyWhere() for TiDB.
-     * Uses string-based SQL generation instead of AST since TiDB's generateQuery() is string-based.
-     */
+    // Returns null if no indexed cols; string-based generation (not AST) since TiDB generateQuery() is string-based.
     private String tryGenerateIndexFriendlyWhere(TiDBTable table, List<TiDBColumn> columns) {
         if (columns.isEmpty()) return null;
 
@@ -3980,7 +3753,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         }
     }
 
-    /** Strategy 0: Simple equality on indexed column — triggers index ref lookup */
+    // Triggers index ref lookup (equality on indexed column).
     private String generateIndexFriendlyEquality(TiDBTable table, List<TiDBColumn> indexedCols, List<TiDBColumn> fallbackCols) {
         TiDBColumn col = !indexedCols.isEmpty() ? Randomly.fromList(indexedCols) : Randomly.fromList(fallbackCols);
         List<String> sampled = sampleColumnValues(table.getName(), col.getName(), 5);
@@ -3990,7 +3763,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         return col.getName() + " = " + generateRandomValueForColumn(col);
     }
 
-    /** Strategy 1: Composite index prefix condition — triggers composite index range scan */
+    // Triggers composite index range scan (prefix condition).
     private String generateIndexFriendlyCompositePrefix(TiDBTable table, List<List<TiDBColumn>> compositeIdxCols) {
         if (compositeIdxCols.isEmpty()) return null;
         List<TiDBColumn> idxCols = Randomly.fromList(compositeIdxCols);
@@ -4028,7 +3801,6 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         return sb.toString();
     }
 
-    /** Strategy 2: Multi-column condition — tests composite index with two column conditions */
     private String generateIndexFriendlyMultiColumn(TiDBTable table, List<TiDBColumn> indexedCols, List<TiDBColumn> fallbackCols) {
         List<TiDBColumn> cols = !indexedCols.isEmpty() ? indexedCols : fallbackCols;
         if (cols.size() < 2) return null;
@@ -4055,7 +3827,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         return sb.toString();
     }
 
-    /** Strategy 3: Range condition on indexed column — triggers index range scan */
+    // Triggers index range scan (range condition on indexed column).
     private String generateIndexFriendlyRange(TiDBTable table, List<TiDBColumn> indexedCols, List<TiDBColumn> fallbackCols) {
         TiDBColumn col = !indexedCols.isEmpty() ? Randomly.fromList(indexedCols) : Randomly.fromList(fallbackCols);
         List<String> sampled = sampleColumnValues(table.getName(), col.getName(), 5);
@@ -4066,7 +3838,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         return col.getName() + " IS NOT NULL";
     }
 
-    /** Strategy 4: Index merge — OR across different indexed columns (IndexMerge) */
+    // OR across different indexed cols triggers TiDB IndexMerge.
     private String generateIndexFriendlyMerge(TiDBTable table, List<TiDBColumn> indexedCols) {
         if (indexedCols.size() < 2) return null;
         Collections.shuffle(indexedCols);
@@ -4093,13 +3865,6 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         return sb.toString();
     }
 
-    /**
-     * Generate index-friendly JOIN clauses for a list of tables.
-     * Returns a SQL fragment like "JOIN t1 ON t0.c0 = t1.c0" that uses
-     * indexed columns for the join condition.
-     *
-     * Adapted from MySQL/Postgres' generateIndexFriendlyJoinClauses() for TiDB.
-     */
     private String generateIndexFriendlyJoinClauses(List<TiDBTable> tables, TiDBTable fromTable) {
         if (tables.size() < 2) return "";
 
@@ -4157,17 +3922,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
 
     // ==================== Mode 24: NULL Index Handling ====================
 
-    /**
-     * Test NULL handling in indexes.
-     * Creates an index on a nullable column, then compares query results
-     * between USE_INDEX (index scan) and IGNORE_INDEX (table scan) for:
-     * - WHERE col IS NULL
-     * - WHERE col IS NOT NULL
-     * - WHERE col IS NULL OR col = value
-     *
-     * NULL values require special handling in B-tree indexes (stored separately),
-     * making this a common source of bugs where index scans miss or miscount NULL rows.
-     */
+    // NULL values are stored separately in B-tree indexes; index scans can miss/miscount them.
     private void checkNullIndexHandling() throws Exception {
         TiDBSchema schema = globalState.getSchema();
         List<TiDBTable> tables = schema.getDatabaseTables();
@@ -4301,7 +4056,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         if (lastCompareFiltered) { countStarFallback(useQuery, ignoreQuery, "TIDB_NULL_IDX"); }
     }
 
-    // ==================== [P0-1] Index Metadata Cache ====================
+    // ==================== Index Metadata Cache ====================
 
     private void invalidateIndexCache() {
         indexCacheValid = false;
@@ -4323,7 +4078,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         indexCacheValid = true;
     }
 
-    // ==================== [P0-5] Cached Column Value Sampling ====================
+    // ==================== Cached Column Value Sampling ====================
 
     private List<String> getCachedSampledValues(String tableName, String colName, int limit) {
         String key = tableName + "." + colName;
@@ -4335,7 +4090,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         return values;
     }
 
-    // ==================== [P0-3] Mode 25: Subquery + Index ====================
+    // ==================== Mode 25: Subquery + Index ====================
 
     private void checkSubqueryIndex() throws Exception {
         TiDBSchema schema = globalState.getSchema();
@@ -4396,7 +4151,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         if (lastCompareFiltered) countStarFallback(queryString, hintQuery, "TIDB_SUBQ_IDX");
     }
 
-    // ==================== [P0-4] Mode 26: Enhanced Index Merge ====================
+    // ==================== Mode 26: Enhanced Index Merge ====================
 
     private void checkIndexMergeEnhanced() throws Exception {
         TiDBTable table = getRandomIndexableTable();
@@ -4457,7 +4212,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         if (lastCompareFiltered) countStarFallback(mergeQuery, ignoreQuery, "TIDB_INDEX_MERGE_ENHANCED");
     }
 
-    // ==================== [P1-2] Mode 27: Loose Index Scan ====================
+    // ==================== Mode 27: Loose Index Scan ====================
 
     private void checkLooseIndexScan() throws Exception {
         TiDBTable table = getRandomIndexableTable();
@@ -4503,14 +4258,9 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         if (lastCompareFiltered) countStarFallback(useQuery, ignoreQuery, "TIDB_LOOSE_SCAN");
     }
 
-    // ==================== [P0-1] Mode 28: DML + Index Consistency ====================
+    // ==================== Mode 28: DML + Index Consistency ====================
 
-    /**
-     * Execute DML (INSERT/UPDATE/DELETE) on a table, then verify that queries
-     * using different index hints produce consistent results. Tests that DML
-     * operations correctly update all index data structures.
-     * Targets: MVCC visibility bugs, index corruption after DML, stale index reads.
-     */
+    // Targets: MVCC visibility bugs, index corruption after DML, stale index reads.
     private void checkDMLIndexConsistency() throws Exception {
         TiDBTable table = getRandomIndexableTable();
         if (table == null) return;
@@ -4642,19 +4392,9 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         assertResultSorted(r1, r2, useQuery, "TIDB_DML_INDEX");
     }
 
-    // ==================== [P0-2] Mode 29: Generated Column + Index ====================
+    // ==================== Mode 29: Generated Column + Index ====================
 
-    /**
-     * Test generated (computed) columns with indexes.
-     * TiDB supports VIRTUAL and STORED generated columns, and allows
-     * creating indexes on STORED generated columns (and VIRTUAL since TiDB 7.5).
-     *
-     * Strategy: Create a table with generated columns + indexes in createIndexFriendlyTables(),
-     * then query using different index hints to verify index scan correctness.
-     *
-     * Already found bugs: min_tidb_db5_cascades_virtual_col_bug.sql,
-     *                     min_tidb_db73_virtual_col_idx_bug.sql
-     */
+    // TiDB supports VIRTUAL (since 7.5) and STORED generated column indexes. Has caught real bugs.
     private void checkGeneratedColumnIndex() throws Exception {
         TiDBSchema schema = globalState.getSchema();
         List<TiDBTable> tables = schema.getDatabaseTables();
@@ -5095,10 +4835,6 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         }
     }
 
-    /**
-     * Query the current collation of a column from information_schema.COLUMNS.
-     * Returns null if the collation cannot be determined.
-     */
     private String getColumnCollation(String tableName, String columnName) {
         try {
             List<String> result = execInternal(
@@ -5111,10 +4847,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         }
     }
 
-    /**
-     * Restore a column's collation to its original value.
-     * Silently ignores failures since this is cleanup, not a test assertion.
-     */
+    // Cleanup only — silently ignores failures (collation restoration is best-effort).
     private void restoreCollation(String tableName, String columnName, String fullType, String originalCollation) {
         try {
             ExpectedErrors restoreErrors = new ExpectedErrors();
@@ -5127,11 +4860,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         }
     }
 
-    /**
-     * Check if a column participates in any index (including PRIMARY) by querying
-     * information_schema.STATISTICS. Used by checkCollationIndex() to avoid
-     * modifying collation on indexed columns, which TiDB does not support.
-     */
+    // TiDB doesn't support modifying collation on indexed columns; used to guard ALTER TABLE MODIFY.
     private boolean isColumnIndexed(String tableName, String columnName) {
         try {
             List<String> result = execInternal(
@@ -5306,11 +5035,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         }
     }
 
-    /**
-     * [P0] Complex multi-index + deep expression query test.
-     * Generates index-aware query, then runs it under cascades vs non-cascades optimizer
-     * to detect result inconsistencies.
-     */
+    // Cascades vs non-cascades optimizer via USE_INDEX_MERGE; detects result inconsistencies.
     private void checkComplexIndexQuery() throws Exception {
         TiDBTable table = getRandomTableWithIndexes();
         if (table == null) return;

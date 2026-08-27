@@ -53,10 +53,33 @@ import idxdiff.postgres.gen.PostgresIndexGenerator;
  * queries, then verify that different query plans (index scan vs seq scan,
  * bitmap scan vs index scan, etc.) produce identical results.
  *
- * This stands on the shoulders of idxdiff's random expression generation,
- * producing queries like:
- *   WHERE ABS(LOWER(c0)) > (SELECT c1 FROM t1 WHERE c2 IS NOT NULL)
- *         AND COALESCE(c3, 0) BETWEEN 1 AND CASE WHEN c4 > 5 THEN 10 ELSE 20 END
+ * Active test modes:
+ * <ul>
+ * <li>1: CREATE_INDEX_CONSISTENCY — query before/after index creation</li>
+ * <li>2: DROP_INDEX_CONSISTENCY — query before/after index drop</li>
+ * <li>3: INDEX_SCAN_VS_BITMAP_SCAN — enable_indexscan vs enable_bitmapscan</li>
+ * <li>4: AGGREGATE_PLAN_CONSISTENCY — aggregate with different index settings</li>
+ * <li>5: JOIN_PLAN_CONSISTENCY [DISABLED]</li>
+ * <li>6: MULTI_INDEX_CONSISTENCY — multiple index creation, compare plans</li>
+ * <li>7: [DISABLED]</li>
+ * <li>8: COVERING_INDEX — index-only scan verification</li>
+ * <li>9: INDEX_MERGE — index merge (bitmap OR/AND)</li>
+ * <li>10: ORDER_BY_LIMIT_INDEX — ORDER BY + LIMIT with index vs seqscan</li>
+ * <li>11: UNIQUE_INDEX_CONSISTENCY — UNIQUE index data consistency</li>
+ * <li>12: EXPRESSION_INDEX — expression index correctness</li>
+ * <li>13: PARTIAL_INDEX — partial index (WHERE clause on index)</li>
+ * <li>14: SIMPLE_INDEX_QUERY — targeted index-friendly WHERE conditions</li>
+ * <li>15: GIST_GIN_INDEX — GiST/GIN index for LIKE/array operations</li>
+ * <li>16: TSVECTOR_INDEX — tsvector GIN full-text search</li>
+ * <li>17: OPTIMIZER_CONFIG_PAIRWISE — enable_*=on vs enable_*=off pairwise</li>
+ * <li>18: SQL_SEMANTIC_EQUIVALENCE — IN-vs-OR, BETWEEN-vs-AND equivalence</li>
+ * <li>19: DETERMINISTIC_INDEX_QUERY — PK-based WHERE with different index plans</li>
+ * <li>20: NULL_INDEX_HANDLING — NULL values in indexed columns</li>
+ * <li>21: PREFIX_INDEX — SUBSTRING function index (Postgres analog)</li>
+ * <li>22: SUBQUERY_INDEX — subquery with index conditions</li>
+ * <li>23: INDEX_COND_PUSHDOWN — Index Cond vs Filter (ICP equivalent)</li>
+ * <li>24: BRIN_INDEX — BRIN Block Range Index (Postgres-specific)</li>
+ * </ul>
  */
 public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
 
@@ -65,8 +88,8 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
 
     private String lastQueryString;
     private boolean dataPopulated = false;
-    private int aggregateFallbackUsed = 0; // P0: how many times COUNT(*) fallback was used
-    private boolean lastCompareFiltered = false; // P0: set true when compareResults filters out a difference
+    private int aggregateFallbackUsed = 0; // how many times COUNT(*) fallback was used
+    private boolean lastCompareFiltered = false; // set true when compareResults filters out a difference
 
     private static final double EPSILON = 1e-10;
     private static final double RELATIVE_TOLERANCE = 1e-6;
@@ -540,11 +563,7 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
 
     // ==================== Query Generation (Deep idxdiff Integration) ====================
 
-    /**
-     * Generate a complex SELECT using idxdiff's PostgresExpressionGenerator.
-     * This produces deeply nested expressions with functions, subqueries,
-     * CASE WHEN, etc. — the same quality as idxdiff's built-in oracles.
-     */
+    // Deeply nested expressions with functions, subqueries, CASE WHEN — same quality as idxdiff's built-in oracles.
     private PostgresSelect generateComplexSelect() {
         PostgresSchema schema = globalState.getSchema();
         if (schema.getDatabaseTables().isEmpty()) return null;
@@ -644,9 +663,6 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         }
     }
 
-    /**
-     * Generate an aggregate SELECT (COUNT, SUM, etc.) with complex WHERE.
-     */
     private PostgresSelect generateAggregateSelect() {
         PostgresSchema schema = globalState.getSchema();
         if (schema.getDatabaseTables().isEmpty()) return null;
@@ -689,9 +705,6 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         }
     }
 
-    /**
-     * Generate a JOIN query between two tables with complex WHERE conditions.
-     */
     private PostgresSelect generateJoinSelect() {
         PostgresSchema schema = globalState.getSchema();
         if (schema.getDatabaseTables().size() < 2) return null;
@@ -735,9 +748,6 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         }
     }
 
-    /**
-     * Generate a SELECT with ORDER BY to test index-based sorting.
-     */
     private PostgresSelect generateOrderedSelect() {
         PostgresSchema schema = globalState.getSchema();
         if (schema.getDatabaseTables().isEmpty()) return null;
@@ -779,10 +789,6 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         }
     }
 
-    /**
-     * Generate index-friendly JOIN clauses: t0.c0 = t1.c0 AND t0.c1 > t1.c1
-     * Uses simple column comparisons for better index utilization.
-     */
     private List<PostgresJoin> generateIndexFriendlyJoinClauses(List<PostgresTable> tables) {
         List<PostgresJoin> joinStatements = new ArrayList<>();
         if (tables.size() < 2) return joinStatements;
@@ -807,9 +813,6 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         return joinStatements;
     }
 
-    /**
-     * Generate an index-friendly JOIN ON condition: t1.c0 = t2.c0 [AND t1.c1 > t2.c1]
-     */
     private PostgresExpression generateIndexJoinCondition(PostgresTable t1, PostgresTable t2) {
         List<PostgresColumn> cols1 = t1.getColumns();
         List<PostgresColumn> cols2 = t2.getColumns();
@@ -852,9 +855,6 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         return combined != null ? combined : PostgresConstant.createTrue();
     }
 
-    /**
-     * Generate JOIN clauses — same pattern as PostgresTLPBase.
-     */
     private List<PostgresJoin> generateJoinClauses(PostgresExpressionGenerator gen,
             List<PostgresColumn> columns, List<PostgresTable> tables) {
         List<PostgresJoin> joinStatements = new ArrayList<>();
@@ -874,9 +874,6 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         return joinStatements;
     }
 
-    /**
-     * Create a subquery — same pattern as PostgresTLPBase.createSubquery.
-     */
     private PostgresSubquery createSubquery(String name, PostgresTables tables) {
         List<PostgresExpression> columns = new ArrayList<>();
         PostgresExpressionGenerator gen = new PostgresExpressionGenerator(globalState)
@@ -901,10 +898,6 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
 
     // ==================== Index Management ====================
 
-    /**
-     * Ensure at least one index exists on the tables in the query,
-     * using idxdiff's built-in PostgresIndexGenerator.
-     */
     private void ensureIndexesExist(PostgresSelect select) {
         try {
             // Create 1-2 indexes using idxdiff's index generator
@@ -972,11 +965,8 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         }
     }
 
-    /** Sorted comparison — for un-ordered result sets (no ORDER BY).
-     *  If query has LIMIT without ORDER BY, results are non-deterministic,
-     *  so we use relaxed multi-set containment check.
-     *  Also handles inheritance syntax (table*) and cross joins which cause
-     *  non-deterministic results across different scan methods. */
+    // For un-ordered result sets (no ORDER BY). LIMIT without ORDER BY is non-deterministic → multi-set check.
+    // Also handles inheritance syntax (table*) and cross joins → non-deterministic across different scan methods.
     private void compareResultsSorted(List<String> r1, List<String> r2, String queryString, String mode) throws Exception {
         lastCompareFiltered = false;
         if (r1.equals(r2)) return;
@@ -1065,10 +1055,8 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         ComparatorHelper.assumeResultSetsAreEqual(r1, r2, queryString, combinedString, globalState);
     }
 
-    /** Strict comparison — order matters (for ORDER BY queries).
-     *  Improved: LIMIT + ORDER BY with unique tie-breaker now gets strict comparison.
-     *  Also handles inheritance syntax (table*) which causes non-deterministic results
-     *  across different scan methods, and cross joins which create duplicate sort keys. */
+    // For ORDER BY queries. LIMIT + unique tie-breaker → strict comparison.
+    // Inheritance syntax (table*) and cross joins fall back to set comparison (non-deterministic sort order).
     private void compareResultsStrict(List<String> r1, List<String> r2, String queryString, String mode) throws Exception {
         lastCompareFiltered = false;
         if (r1.equals(r2)) return;
@@ -1164,7 +1152,6 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         ComparatorHelper.assumeResultSetsAreEqual(r1, r2, queryString, combinedString, globalState);
     }
 
-    /** Column delimiter used by executeQuery via getResultSetAllColumnsAsString. */
     private static final String COLUMN_DELIMITER = " ||| ";
 
     private boolean areApproximatelyEqual(List<String> r1, List<String> r2) {
@@ -1213,16 +1200,8 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
 
     // ==================== P1: Index-Friendly Table Creation ====================
 
-    /**
-     * P1: Create 1-2 dedicated index-friendly tables with:
-     *   - 8-10 columns (INT + TEXT dominant, for wide index coverage)
-     *   - NOT NULL constraints (avoids NULL cardinality issues)
-     *   - Pre-built indexes: single-column B-tree, composite, covering, partial, expression
-     *
-     * These tables supplement idxdiff's randomly-generated tables, ensuring
-     * the optimizer always has rich index structures to choose from.
-     * Only creates tables that don't already exist.
-     */
+    // Creates 1-2 dedicated idx_tN tables (INT+TEXT, NOT NULL, pre-built B-tree/composite/covering/partial/expr indexes).
+    // Supplements idxdiff's random tables to ensure the optimizer always has rich index structures.
     private void createIndexFriendlyTables() {
         ExpectedErrors tableErrors = new ExpectedErrors();
         tableErrors.add("already exists");
@@ -1329,11 +1308,8 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
 
     // ==================== A. Ensure Sufficient Data ====================
 
-    /**
-     * Populate tables with enough rows for the optimizer to consider indexes.
-     * PostgreSQL won't use an index scan on a table with < ~20 rows.
-     * Only runs once per oracle instance to avoid repeated inserts.
-     */
+    // PostgreSQL won't use an index scan on tables with < ~20 rows; populates each table with 150 rows.
+    // Runs once per oracle instance (dataPopulated flag).
     private void ensureSufficientData() {
         if (dataPopulated) return;
         // Refresh schema to reflect any DDL changes (views, generated columns, etc.)
@@ -1433,12 +1409,7 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         } catch (Exception e) { }
     }
 
-    /**
-     * Sanitize a string for use inside a PostgreSQL string literal.
-     * Removes control characters (newline, CR, tab, null, etc.) that would
-     * cause "Unterminated string literal" or similar syntax errors, and
-     * escapes single quotes.
-     */
+    // Strips control characters (newline, tab, etc.) that break PostgreSQL string literals; escapes single quotes.
     private static String sanitizeStringLiteral(String s) {
         StringBuilder sb = new StringBuilder(s.length());
         for (int i = 0; i < s.length(); i++) {
@@ -1504,14 +1475,8 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
 
     // ==================== P0: Data-Aware Value Generation ====================
 
-    /**
-     * P0: Generate a value that targets actual data in the table.
-     * Priority: sampleColumnValues > MIN/MAX > random (fallback).
-     * This replaces bare generateRandomValueForType() calls in query WHERE clauses
-     * to ensure WHERE conditions hit real data instead of producing empty result sets.
-     *
-     * Adapted from MySQL's generateDataAwareValueForType() for PostgreSQL.
-     */
+    // Priority: sampleColumnValues > MIN/MAX > random. Targets actual data so WHERE conditions
+    // hit real rows instead of producing empty result sets (which never trigger index scans).
     private String generateDataAwareValueForType(String tableName, PostgresColumn col) {
         // Priority 1: Sample actual values from the table (70% chance)
         if (!Randomly.getBooleanWithRatherLowProbability()) {
@@ -1530,10 +1495,8 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         return generateRandomValueForType(col.getType());
     }
 
-    /**
-     * Quote a sampled value based on column type.
-     * TEXT values need single-quote wrapping; numeric values returned as-is.
-     */
+    // TEXT, MONEY, INET, BIT, RANGE → single-quoted; BOOLEAN → TRUE/FALSE; MONEY $N must be quoted
+    // to avoid PostgreSQL treating $N as a prepared-statement parameter.
     private String quoteSampledValue(String rawValue, PostgresColumn col) {
         if (rawValue == null) return "NULL";
         if (col.getType() == PostgresDataType.TEXT) {
@@ -1591,10 +1554,7 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         return rawValue;
     }
 
-    /**
-     * P0: Try to get MIN or MAX value from column for better index hit rate.
-     * Uses the column's index (if any) for efficient single-row lookup.
-     */
+    // MIN/MAX fallback for data-aware value generation; returns null on error.
     private String tryGetMinMaxValue(String tableName, PostgresColumn col) {
         try {
             String func = Randomly.getBoolean() ? "MIN" : "MAX";
@@ -1647,20 +1607,8 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
 
     // ==================== B. Index-Aware WHERE Generation ====================
 
-    /**
-     * Try to generate a WHERE condition that can utilize an existing index.
-     * Returns null if no suitable index found (caller should fall back to random WHERE).
-     */
-    /**
-     * Smart index-aware WHERE clause generation.
-     * Analyzes actual indexes on the tables and generates conditions that
-     * trigger specific PostgreSQL optimizer paths:
-     * - Composite index prefix conditions (range scan, ref access)
-     * - OR across different indexed columns (Bitmap index scan)
-     * - Multi-column AND conditions (composite index full match)
-     * - NULL handling conditions (IS NULL / IS NOT NULL)
-     * - Type-specific patterns (IN for INT, LIKE prefix for VARCHAR, etc.)
-     */
+    // Analyzes actual indexes and triggers specific PG optimizer paths:
+    // composite prefix, Bitmap OR, composite full match, NULL boundary, type-specific (IN/LIKE).
     private PostgresExpression tryGenerateIndexFriendlyWhere(List<PostgresTable> tables, PostgresExpressionGenerator gen) {
         try {
             // Step 1: Collect index information
@@ -1723,7 +1671,7 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         }
     }
 
-    /** Strategy 1: Composite index prefix condition — triggers composite index range scan */
+    // Strategy 1: composite index prefix condition — triggers composite index range scan.
     private PostgresExpression generateCompositePrefixCondition(
             List<List<PostgresColumn>> compositeIdxCols, Randomly r, PostgresExpressionGenerator gen) {
         if (compositeIdxCols.isEmpty()) return null;
@@ -1748,7 +1696,7 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         return maybeAddComplexExtra(combined, gen);
     }
 
-    /** Strategy 2: Full composite index condition — triggers unique/ref lookup */
+    // Strategy 2: full composite index condition — triggers unique/ref lookup.
     private PostgresExpression generateFullCompositeCondition(
             List<List<PostgresColumn>> compositeIdxCols, Randomly r, PostgresExpressionGenerator gen) {
         if (compositeIdxCols.isEmpty()) return null;
@@ -1764,7 +1712,7 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         return maybeAddComplexExtra(combined, gen);
     }
 
-    /** Strategy 3: Index merge condition — OR across different indexed columns (Bitmap OR) */
+    // Strategy 3: index merge condition — OR across different indexed columns (Bitmap OR).
     private PostgresExpression generateIndexMergeCondition(
             List<PostgresColumn> singleIdxCols, List<PostgresColumn> indexedCols, Randomly r, PostgresExpressionGenerator gen) {
         List<PostgresColumn> candidates = singleIdxCols.size() >= 2 ? singleIdxCols : indexedCols;
@@ -1784,7 +1732,7 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         return maybeAddComplexExtra(orCond, gen);
     }
 
-    /** Strategy 4: Range with NULL handling — tests index scan NULL boundary */
+    // Strategy 4: range with NULL handling — tests index scan NULL boundary.
     private PostgresExpression generateRangeWithNullCondition(
             List<PostgresColumn> indexedCols, Randomly r, PostgresExpressionGenerator gen) {
         PostgresColumn col = Randomly.fromList(indexedCols);
@@ -1806,7 +1754,7 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         }
     }
 
-    /** Strategy 5: Multi-index OR with varied operators — triggers BitmapOr */
+    // Strategy 5: multi-index OR with varied operators — triggers BitmapOr.
     private PostgresExpression generateMultiIndexOrCondition(
             List<PostgresColumn> indexedCols, Randomly r, PostgresExpressionGenerator gen) {
         if (indexedCols.size() < 2) return null;
@@ -1839,7 +1787,7 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         return maybeAddComplexExtra(combined, gen);
     }
 
-    /** Strategy 6: Type-aware conditions for specific optimizer paths */
+    // Strategy 6: type-aware conditions for specific optimizer paths.
     private PostgresExpression generateTypeAwareCondition(
             List<PostgresColumn> indexedCols, Randomly r, PostgresExpressionGenerator gen) {
         PostgresColumn col = Randomly.fromList(indexedCols);
@@ -1886,7 +1834,6 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         return maybeAddComplexExtra(condition, gen);
     }
 
-    /** Generate a range condition: col > val, col < val, col >= val, or col BETWEEN a AND b */
     private PostgresExpression generateRangeCondition(PostgresExpression colRef, PostgresColumn col, Randomly r) {
         int variant = r.getInteger(0, 4);
         switch (variant) {
@@ -1904,7 +1851,6 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         }
     }
 
-    /** Generate a list of constants for IN conditions */
     private List<PostgresExpression> generateConstantList(PostgresDataType type, Randomly r, int min, int max) {
         List<PostgresExpression> list = new ArrayList<>();
         int count = r.getInteger(min, max + 1);
@@ -1914,7 +1860,6 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         return list;
     }
 
-    /** Maybe add a complex extra expression */
     private PostgresExpression maybeAddComplexExtra(PostgresExpression combined, PostgresExpressionGenerator gen) {
         if (combined != null && Randomly.getBooleanWithRatherLowProbability()) {
             try {
@@ -1925,7 +1870,7 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         return combined;
     }
 
-    /** Fallback: basic WHERE using all columns */
+    // Fallback when no indexed columns found: builds WHERE from all columns.
     private PostgresExpression tryGenerateBasicWhere(List<PostgresTable> tables, PostgresExpressionGenerator gen) {
         try {
             List<PostgresColumn> allCols = new ArrayList<>();
@@ -1953,7 +1898,6 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         }
     }
 
-    /** Generate a simple, index-friendly condition: col op constant */
     private PostgresExpression generateSimpleIndexCondition(PostgresExpression colRef, PostgresColumn col, Randomly r) {
         int opType = r.getInteger(0, 7);
         switch (opType) {
@@ -2014,22 +1958,16 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
 
     // ==================== P0: Inheritance & Cross-Join Detection ====================
 
-    /**
-     * Check if the query uses inheritance syntax (table*).
-     * Inheritance syntax causes different scan methods to return different rows
-     * because SeqScan includes child tables while some IndexScan paths may not.
-     */
+    // PostgreSQL inheritance (table*): SeqScan includes child tables, some IndexScan paths may not.
+    // Different row counts between plans are expected behavior, not a bug.
     private boolean usesInheritanceSyntax(String queryString) {
         // Match table* pattern: a table name followed by *
         // This is PostgreSQL's inheritance syntax: SELECT FROM t0* includes child tables
         return queryString.matches("(?s).*\\bt\\d+\\*.*") || queryString.contains("* ");
     }
 
-    /**
-     * Check if the query involves a cross join (FROM multiple tables without JOIN conditions).
-     * Cross joins create duplicate ORDER BY values even when the ORDER BY column is unique
-     * in its own table, making sort order non-deterministic.
-     */
+    // Cross joins create duplicate ORDER BY values even when the column is unique in its own table,
+    // making sort order non-deterministic (false positives with ORDER BY + LIMIT).
     private boolean usesCrossJoin(String queryString) {
         try {
             String upper = queryString.toUpperCase();
@@ -2063,13 +2001,8 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         }
     }
 
-    /**
-     * Check if the query references a view (v0 or v1) that may produce
-     * non-deterministic row ordering. Recursive views and temporary views
-     * without ORDER BY can return rows in different orders depending on
-     * the execution path (SeqScan vs IndexScan), leading to false positives
-     * when combined with cross joins.
-     */
+    // Recursive/temporary views (v0, v1) without ORDER BY produce non-deterministic row ordering
+    // across SeqScan vs IndexScan paths — combined with cross joins this causes false positives.
     private boolean usesNonDeterministicView(String queryString) {
         String upper = queryString.toUpperCase();
         // Check for view references (v0, v1) in FROM clause or JOIN
@@ -2079,15 +2012,8 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
 
     // ==================== P1: Tie-Breaker Detection ====================
 
-    /**
-     * Check if the ORDER BY clause includes a column that is a PRIMARY KEY or UNIQUE index
-     * AND the column has no NULL values.
-     * If so, the sort order is deterministic even with LIMIT, because there are no ties.
-     *
-     * IMPORTANT: PostgreSQL UNIQUE constraints allow multiple NULL values, so a UNIQUE index
-     * alone is NOT sufficient to guarantee deterministic ORDER BY. We must also verify that
-     * the column has no NULLs (via NOT NULL constraint or runtime check).
-     */
+    // IMPORTANT: PostgreSQL UNIQUE constraints allow multiple NULLs, so a UNIQUE index alone
+    // is not sufficient for deterministic ORDER BY — must also verify no NULL values exist.
     private boolean hasUniqueOrderByTieBreaker(String queryString) {
         try {
             String upperQuery = queryString.toUpperCase();
@@ -2157,11 +2083,8 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         }
     }
 
-    /**
-     * Extract table names from the FROM clause of a query.
-     * Returns null if parsing fails (conservative: null means "don't filter").
-     * Handles: FROM t0, FROM t0, t1, FROM ONLY t2, FROM t0*, FROM t0 AS a, FROM t0 a
-     */
+    // Extracts table names from FROM clause; returns null on parse failure (null = conservative, don't filter).
+    // Handles: FROM t0, FROM t0, t1, FROM ONLY t2, FROM t0*, FROM t0 AS a, FROM t0 a
     private Set<String> extractFromTables(String queryString) {
         try {
             String upper = queryString.toUpperCase();
@@ -2207,10 +2130,7 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         }
     }
 
-    /**
-     * Runtime check: does the given column have any NULL values in the table?
-     * Returns true if NULL values exist, false if no NULLs (or on error, conservatively returns true).
-     */
+    // Returns true if NULL values exist, or conservatively true on error (avoids false tie-breaker detection).
     private boolean columnHasNullValues(PostgresTable table, String columnName) {
         try {
             String checkQuery = "SELECT EXISTS(SELECT 1 FROM " + table.getName()
@@ -2225,15 +2145,8 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         }
     }
 
-    /**
-     * Runtime verification that a column actually has unique values in the table.
-     * This handles edge cases where schema metadata is inaccurate:
-     * 1. UNIQUE index creation failed (data has duplicates, but schema may be stale)
-     * 2. Partial UNIQUE index (only enforces uniqueness on a WHERE subset)
-     * 3. Index dropped/recreated between schema fetch and query execution
-     *
-     * @return true if the column has no duplicate values, false otherwise
-     */
+    // Runtime verification: schema metadata can be stale (failed UNIQUE creation, partial indexes,
+    // index dropped/recreated between schema fetch and query execution).
     private boolean isColumnActuallyUnique(PostgresTable table, String columnName) {
         try {
             String query = String.format(
@@ -2247,21 +2160,9 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         }
     }
 
-    /**
-     * Runtime check: compare actual ORDER BY column values between two result sets.
-     * If all ORDER BY values are identical across both result sets (as multi-sets),
-     * then any difference in results is due to non-deterministic tie-breaking among
-     * rows with identical ORDER BY values — this is a false positive, not a real bug.
-     *
-     * If ORDER BY values differ between the two plans, one plan is returning a row
-     * that should not appear first by sort order — this IS a real bug.
-     *
-     * This avoids blanket-skipping all non-unique ORDER BY + LIMIT cases, which would
-     * mask real bugs. Instead, we only skip when the data confirms non-deterministic
-     * tie-breaking.
-     *
-     * @return true if all ORDER BY values are identical (difference is non-deterministic tie-breaking)
-     */
+    // If ORDER BY values are identical as multi-sets, the difference is non-deterministic tie-breaking (false positive).
+    // If ORDER BY values differ, one plan returns a wrong row — that IS a real bug.
+    // Avoids blanket-skipping non-unique ORDER BY + LIMIT, which would mask real bugs.
     private boolean orderByValuesAreIdentical(List<String> r1, List<String> r2, String queryString) {
         try {
             // Parse ORDER BY column names
@@ -2339,12 +2240,8 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         }
     }
 
-    /**
-     * Extract ORDER BY column values from result rows.
-     * Each row is formatted as "col0 ||| col1 ||| col2 ||| ..."
-     * We extract the values at the specified column indices.
-     * Returns a multi-set (using sorted string representation for comparison).
-     */
+    // Extracts ORDER BY column values from rows (delimited by " ||| "); returns as a frequency-keyed set
+    // for multi-set comparison (preserves duplicates to detect non-deterministic tie-breaking).
     private Set<String> extractOrderByValues(List<String> rows, List<Integer> colIndices) {
         // Use a frequency map to handle multi-set comparison
         Map<String, Integer> freqMap = new HashMap<>();
@@ -2366,7 +2263,6 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         return result;
     }
 
-    /** Compare two lists as multi-sets (ignoring order and duplicates) */
     private boolean areSetsEqual(List<String> list1, List<String> list2) {
         Map<String, Integer> freq1 = new HashMap<>();
         Map<String, Integer> freq2 = new HashMap<>();
@@ -2377,11 +2273,7 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
 
     // ==================== Mode 8: Covering Index (Index-Only Scan) ====================
 
-    /**
-     * Create an index that covers all columns in the SELECT list (with INCLUDE).
-     * Compare Index-Only Scan vs SeqScan results.
-     * PG's Index-Only Scan skips heap fetches — bugs here cause wrong results.
-     */
+    // PG's Index-Only Scan (INCLUDE columns) skips heap fetches — bugs produce wrong results vs SeqScan.
     private void checkCoveringIndex() throws Exception {
         PostgresSchema schema = globalState.getSchema();
         List<PostgresTable> tables = schema.getDatabaseTables();
@@ -2468,11 +2360,7 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
 
     // ==================== Mode 9: Index Merge (BitmapOr) ====================
 
-    /**
-     * Create two separate single-column indexes, then query with OR.
-     * This triggers BitmapOr path which merges results from two index scans.
-     * Compare with SeqScan to detect BitmapOr bugs.
-     */
+    // WHERE col1 = v OR col2 = v triggers the BitmapOr path (merges two index scans); compare vs SeqScan.
     private void checkIndexMerge() throws Exception {
         PostgresSchema schema = globalState.getSchema();
         List<PostgresTable> tables = schema.getDatabaseTables();
@@ -2545,11 +2433,7 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
 
     // ==================== Mode 10: ORDER BY + LIMIT Index ====================
 
-    /**
-     * Create an index, then run ORDER BY col LIMIT N.
-     * Compare IndexScan (reads in order) vs SeqScan+Sort.
-     * Tests that index-based LIMIT produces correct top-N results.
-     */
+    // IndexScan reads rows in index order (no sort step) vs SeqScan+Sort; LIMIT top-N must match.
     private void checkOrderByLimitIndex() throws Exception {
         PostgresSchema schema = globalState.getSchema();
         List<PostgresTable> tables = schema.getDatabaseTables();
@@ -2620,10 +2504,7 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
 
     // ==================== Mode 11: UNIQUE Index Consistency ====================
 
-    /**
-     * Create a UNIQUE INDEX and verify data consistency.
-     * Compare COUNT(*) before and after, and query results with different plans.
-     */
+    // Verifies COUNT(*) is unchanged after UNIQUE INDEX creation, then compares SeqScan vs IndexScan results.
     private void checkUniqueIndexConsistency() throws Exception {
         PostgresSchema schema = globalState.getSchema();
         List<PostgresTable> tables = schema.getDatabaseTables();
@@ -2711,11 +2592,8 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
 
     // ==================== Mode 12: Expression Index ====================
 
-    /**
-     * PG supports expression indexes: CREATE INDEX ON t(LOWER(col)).
-     * Create an expression index and verify queries using the same expression
-     * produce consistent results with different plans.
-     */
+    // PG expression indexes (CREATE INDEX ON t(LOWER(col))): queries using the same expression
+    // must produce identical results with IndexScan vs SeqScan.
     private void checkExpressionIndex() throws Exception {
         PostgresSchema schema = globalState.getSchema();
         List<PostgresTable> tables = schema.getDatabaseTables().stream()
@@ -2793,15 +2671,8 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
 
     // ==================== Mode 13: Partial Index ====================
 
-    /**
-     * PG supports partial indexes: CREATE INDEX ON t(col) WHERE condition.
-     * Verify that queries matching the partial index condition produce
-     * consistent results with different plans.
-     *
-     * P0 enhancement: Uses data-aware values for both partial index condition
-     * and query WHERE clause, testing real data distributions instead of
-     * fixed conditions like "col > 0" or "IS NOT NULL".
-     */
+    // PG partial indexes (CREATE INDEX ON t(col) WHERE cond): queries matching the condition
+    // must produce identical results; uses data-aware values instead of fixed "col > 0".
     private void checkPartialIndex() throws Exception {
         PostgresSchema schema = globalState.getSchema();
         List<PostgresTable> tables = schema.getDatabaseTables();
@@ -2859,11 +2730,8 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         if (lastCompareFiltered) countStarFallback(queryString, queryString, "PG_PARTIAL_INDEX");
     }
 
-    /**
-     * P0: Build a data-driven partial index condition using actual column statistics.
-     * Instead of fixed "col > 0", uses MIN/MAX/sampled values to create
-     * selective partial index conditions that target real data ranges.
-     */
+    // Uses MIN/MAX/sampled values for partial index conditions instead of fixed "col > 0",
+    // targeting real data ranges for better selectivity.
     private String buildDataDrivenPartialCondition(String tblName, PostgresColumn col) {
         String colName = col.getName();
 
@@ -2933,14 +2801,7 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         }
     }
 
-    /**
-     * P0: Build a query that exercises the partial index in diverse ways.
-     * Patterns:
-     *   0: Exact match of partial index condition (basic coverage)
-     *   1: Partial condition + additional data-aware filter on another column
-     *   2: Partial condition + range scan on indexed column
-     *   3: Partial condition + IN list with sampled values
-     */
+    // Patterns: 0=exact match, 1=partial+extra filter, 2=partial+range, 3=partial+IN list.
     private String buildPartialIndexQuery(String tblName, PostgresColumn col,
             PostgresTable table, String partialWhere) {
         String colName = col.getName();
@@ -2998,20 +2859,8 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
 
     // ==================== Mode 14: Simple Index Query ====================
 
-    /**
-     * P0: Generate simple queries that directly target existing indexes.
-     * Instead of complex random expressions (which rarely trigger index scans),
-     * this mode queries pg_indexes to find actual indexes, then builds simple
-     * WHERE conditions on the indexed columns. This maximizes the chance that
-     * PostgreSQL chooses different plans under different enable_* settings.
-     *
-     * Query patterns:
-     *   SELECT * FROM t WHERE indexed_col = value
-     *   SELECT * FROM t WHERE indexed_col > value AND indexed_col2 < value
-     *   SELECT * FROM t WHERE indexed_col IN (v1, v2, v3)
-     *   SELECT * FROM t WHERE indexed_col BETWEEN a AND b
-     *   SELECT indexed_col FROM t ORDER BY indexed_col LIMIT N
-     */
+    // Uses actual indexed columns (not random expressions) to maximize chance of different plans
+    // under enable_* settings. Patterns: =, >, BETWEEN, IN, multi-col AND, IS NULL, LIKE prefix.
     private void checkSimpleIndexQuery() throws Exception {
         PostgresSchema schema = globalState.getSchema();
         List<PostgresTable> tables = schema.getDatabaseTables();
@@ -3179,11 +3028,7 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
 
     // ==================== P0: EXPLAIN Plan Verification ====================
 
-    /**
-     * Get the EXPLAIN plan for a query in PostgreSQL.
-     * Uses EXPLAIN (FORMAT TEXT) which returns one plan node per row.
-     * Each row contains the node type, relations, and cost info.
-     */
+    // EXPLAIN returns one plan node per row; each row has node type, relation name, and cost info.
     private List<String> getExplainPlan(String queryString) {
         List<String> plan = new ArrayList<>();
         try {
@@ -3203,12 +3048,8 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         return plan;
     }
 
-    /**
-     * Check if two PostgreSQL EXPLAIN plans are different.
-     * Compares the operator node types by extracting the first non-whitespace
-     * token from each plan line (e.g., "Seq Scan", "Index Scan", "Bitmap Heap Scan").
-     * Ignores cost/row estimates which can vary between settings.
-     */
+    // Compares operator node types (e.g., "Seq Scan", "Index Scan"); ignores cost/row estimates
+    // which vary between enable_* settings and would produce false "different" results.
     private boolean plansAreDifferent(List<String> plan1, List<String> plan2) {
         if (plan1.isEmpty() || plan2.isEmpty()) return true; // Can't verify, assume different
         // Compare extracted node types
@@ -3218,11 +3059,8 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         return !nodes1.equals(nodes2);
     }
 
-    /**
-     * Extract plan node types from EXPLAIN output.
-     * Each line like "  ->  Seq Scan on t0  (cost=..." becomes "Seq Scan on t0"
-     * We strip the arrow prefix and cost info to get just the node type + relation.
-     */
+    // Strips "  ->  " prefix and "(cost=...)" suffix from EXPLAIN output lines,
+    // leaving just the node type + relation (e.g., "Seq Scan on t0").
     private List<String> extractPlanNodes(List<String> plan) {
         List<String> nodes = new ArrayList<>();
         for (String line : plan) {
@@ -3239,16 +3077,8 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
 
     // ==================== Mode 15: GiST/GIN Index (P0 - PostgreSQL-specific) ====================
 
-    /**
-     * P0: Test PostgreSQL GiST/GIN indexes for pattern matching.
-     * GiST/GIN with pg_trgm operator class enables index-accelerated LIKE queries.
-     * This is a PostgreSQL-exclusive feature — MySQL and TiDB use FULLTEXT instead.
-     *
-     * Strategy:
-     * 1. Create a GiST or GIN index with pg_trgm on a TEXT column
-     * 2. Run LIKE/ILIKE queries that should use the index
-     * 3. Compare Index Scan vs Seq Scan results
-     */
+    // PostgreSQL-exclusive: GiST/GIN with pg_trgm enables index-accelerated LIKE/ILIKE queries.
+    // Creates a trigram index on a TEXT column; compares trigram index scan vs SeqScan results.
     private void checkGiSTGINIndex() throws Exception {
         PostgresSchema schema = globalState.getSchema();
         List<PostgresTable> tables = schema.getDatabaseTables();
@@ -3356,17 +3186,8 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
 
     // ==================== Mode 16: tsvector GIN Full-Text Search (P0 - PostgreSQL-specific) ====================
 
-    /**
-     * P0: Test PostgreSQL tsvector + GIN index full-text search.
-     * PostgreSQL's tsvector/tsquery is its most unique indexing feature —
-     * no other database in our test has an equivalent.
-     *
-     * Strategy:
-     * 1. Find a TEXT column in a table
-     * 2. Create a GIN index on to_tsvector('english', col)
-     * 3. Run to_tsquery queries and compare GIN index scan vs SeqScan
-     * 4. Also test plainto_tsquery and phraseto_tsquery variants
-     */
+    // tsvector/tsquery GIN full-text search is PostgreSQL-exclusive (no MySQL/TiDB equivalent).
+    // Tests to_tsquery, plainto_tsquery, phraseto_tsquery variants vs SeqScan.
     private void checkTsvectorIndex() throws Exception {
         PostgresSchema schema = globalState.getSchema();
         List<PostgresTable> tables = schema.getDatabaseTables();
@@ -3467,7 +3288,7 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         if (lastCompareFiltered) countStarFallback(queryString, queryString, "PG_TSVECTOR_INDEX");
     }
 
-    /** Internal query execution that returns null on error (for sampling) */
+    // Returns null on error; used for sampling queries that are expected to sometimes fail.
     private List<String> execInternal(String query) {
         try {
             return ComparatorHelper.getResultSetAllColumnsAsString(query, errors, globalState, " ||| ");
@@ -3478,11 +3299,8 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
 
     // ==================== Mode 17: Optimizer Config Pairwise ====================
 
-    /**
-     * P3-B: Pairwise comparison of query results with enable_* planner flags
-     * toggled on vs off. Tests specific optimizer paths that may have bugs
-     * when certain plan types are disabled.
-     */
+    // Toggles a single enable_* planner flag off and compares COUNT(*) results — detects optimizer
+    // bugs that only surface when specific plan types (hashagg, nestloop, etc.) are disabled.
     private void checkOptimizerConfigPairwise() throws Exception {
         PostgresSchema schema = globalState.getSchema();
         List<PostgresTable> tables = schema.getDatabaseTables();
@@ -3532,11 +3350,8 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
 
     // ==================== Mode 18: SQL Semantic Equivalence ====================
 
-    /**
-     * P3-C: Test semantically equivalent SQL expressions using indexes.
-     * Compares IN vs OR, BETWEEN vs >= AND <=, NOT IN vs <> AND <>.
-     * These should always produce identical results — a mismatch is a bug.
-     */
+    // Semantically equivalent expressions (IN vs OR, BETWEEN vs >= AND <=, NOT IN vs <> AND <>)
+    // must always produce identical results — any mismatch is a real bug.
     private void checkSQLSemanticEquivalence() throws Exception {
         PostgresSchema schema = globalState.getSchema();
         List<PostgresTable> tables = schema.getDatabaseTables();
@@ -3652,12 +3467,8 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
 
     // ==================== P0: COUNT(*) Aggregate Fallback ====================
 
-    /**
-     * P0: When compareResultsSorted/Strict filters out a difference (e.g., LIMIT without
-     * ORDER BY), use COUNT(*) as a deterministic fallback to still detect bugs.
-     * COUNT(*) is not affected by row ordering or LIMIT — if the counts differ
-     * between two plans, one plan has a genuine bug.
-     */
+    // When row-level comparison is skipped (LIMIT without ORDER BY), COUNT(*) is still deterministic.
+    // Counts differing between two plans → genuine bug regardless of row ordering.
     private void countStarFallback(String queryA, String queryB, String mode) throws Exception {
         try {
             String countA = wrapInCountStar(queryA);
@@ -3678,12 +3489,8 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         }
     }
 
-    /**
-     * P0: Wrap a query in SELECT COUNT(*) FROM (original_query) to get a deterministic result.
-     * Uses subquery wrapping which is safe for any query structure (subqueries, UNION, etc.).
-     * The COUNT(*) counts rows returned by the original query (including any LIMIT).
-     * This is correct for our purpose: verifying that two plans return the same number of rows.
-     */
+    // Subquery wrapping is safe for any structure (UNION, subqueries, etc.).
+    // COUNT(*) includes LIMIT — counts rows actually returned, not total matching rows.
     private String wrapInCountStar(String query) {
         // Remove trailing semicolon
         String q = query.endsWith(";") ? query.substring(0, query.length() - 1) : query;
@@ -3693,9 +3500,6 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
 
     // ==================== Mode 19: Deterministic Index Query (P4) ====================
 
-    /**
-     * Sample actual column values from a table for deterministic WHERE conditions.
-     */
     private List<String> sampleColumnValues(String tableName, String colName, int limit) {
         try {
             String query = "SELECT " + colName + " FROM " + tableName
@@ -3706,10 +3510,7 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         }
     }
 
-    /**
-     * Find a column that has a UNIQUE index (acts as deterministic key for WHERE).
-     * In PG, PostgresColumn doesn't have isPrimaryKey(), so we look for unique single-column indexes.
-     */
+    // PG's PostgresColumn has no isPrimaryKey(); falls back to scanning for single-column UNIQUE indexes.
     private PostgresColumn getUniqueKeyColumn(PostgresTable table) {
         for (PostgresIndex idx : table.getIndexes()) {
             if (idx.isUnique() && idx.getColumnNames().size() == 1) {
@@ -3724,9 +3525,6 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         return cols.isEmpty() ? null : cols.get(0);
     }
 
-    /**
-     * Quote a value for SQL, handling type-specific escaping.
-     */
     private String quoteValueForSQL(String rawValue, PostgresColumn col) {
         if (rawValue == null) return "NULL";
         // NOTE: Do NOT treat values that merely start/end with a single quote as
@@ -3759,21 +3557,8 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         return rawValue;
     }
 
-    /**
-     * Build a deterministic query targeting this table's indexes.
-     * Uses unique column for WHERE to guarantee data match across plans.
-     */
-    /**
-     * Build a deterministic query using index columns for WHERE.
-     * 7 query templates covering diverse index scan patterns:
-     *   0: SELECT * with equality/range ORDER BY col LIMIT 50
-     *   1: SELECT COUNT(*) with equality/range
-     *   2: SELECT * LIMIT 10
-     *   3: SELECT * with BETWEEN range scan
-     *   4: SELECT * with IN list
-     *   5: SELECT col covering index scan ORDER BY col
-     *   6: SELECT * with multi-column composite index conditions
-     */
+    // 7 patterns: 0=SELECT* ORDER BY LIMIT50, 1=COUNT(*), 2=SELECT* LIMIT10, 3=BETWEEN,
+    // 4=IN list, 5=covering scan, 6=multi-column WHERE.
     private String buildDeterministicQuery(PostgresTable table, PostgresColumn keyCol, String keyVal) {
         String tblName = table.getName();
         String colName = keyCol.getName();
@@ -3845,11 +3630,8 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
         return query;
     }
 
-    /**
-     * P4: Deterministic Index Query — uses unique-index column for WHERE,
-     * forces different plans via enable_* settings to expose optimizer/execution bugs.
-     * PG doesn't support USE INDEX hints, so we use session-level enable_* flags.
-     */
+    // PG has no USE INDEX hints — forces different plans via SET enable_indexscan/bitmapscan = OFF.
+    // Uses unique-index column for WHERE to ensure deterministic results across plans.
     private void checkDeterministicIndexQuery() throws Exception {
         PostgresSchema schema = globalState.getSchema();
         List<PostgresTable> tables = schema.getDatabaseTables();
@@ -4027,14 +3809,8 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
 
     // ==================== Mode 21: Prefix Index (SUBSTRING Function Index) ====================
 
-    /**
-     * Phase 2: Test prefix index using SUBSTRING expression index.
-     * PG doesn't support MySQL-style col(N) prefix index syntax, but supports
-     * CREATE INDEX ON t(SUBSTRING(col, 1, N)) as a function index.
-     * This tests that prefix-based index scans produce correct results.
-     *
-     * Reference: MySQL checkPrefixIndex() (Mode 12), TiDB checkPrefixIndex() (Mode 14)
-     */
+    // PG has no MySQL-style col(N) prefix syntax; uses SUBSTRING(col, 1, N) expression index instead.
+    // Tests that prefix-based index scans produce correct results.
     private void checkPrefixIndex() throws Exception {
         PostgresSchema schema = globalState.getSchema();
         List<PostgresTable> tables = schema.getDatabaseTables();
@@ -4130,13 +3906,8 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
 
     // ==================== Mode 22: Subquery + Index ====================
 
-    /**
-     * Phase 2: Test subquery execution with indexes on both outer and inner tables.
-     * Verifies that different subquery execution strategies (hash semi-join vs
-     * materialization vs direct index scan) produce identical results.
-     *
-     * Reference: MySQL checkSubqueryIndex() (Mode 19), TiDB checkSubqueryIndex() (Mode 25)
-     */
+    // Different subquery strategies (hash semi-join vs materialization vs index scan) must produce
+    // identical results — tests IN subquery and EXISTS correlated subquery.
     private void checkSubqueryIndex() throws Exception {
         PostgresSchema schema = globalState.getSchema();
         List<PostgresTable> tables = new ArrayList<>(schema.getDatabaseTables());
@@ -4229,24 +4000,8 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
 
     // ==================== Mode 23: Index Cond Pushdown (ICP Equivalent) ====================
 
-    /**
-     * Phase 2: Test PG's Index Cond vs Filter (equivalent to MySQL's ICP).
-     * PG's IndexScan has two types of conditions:
-     *   - Index Cond: evaluated during index scan (pushed down to index)
-     *   - Filter: evaluated after heap fetch (not pushed down)
-     *
-     * A bug in Index Cond evaluation could cause wrong results compared to
-     * a correct SeqScan with Filter evaluation.
-     *
-     * Strategy:
-     * 1. Create a composite index on (col1, col2)
-     * 2. Query with WHERE col1 = v1 AND col2 > v2
-     *    - Index Cond: col1 = v1 (prefix, pushed to index)
-     *    - Filter: col2 > v2 (non-prefix, evaluated after heap fetch)
-     * 3. Compare IndexScan vs SeqScan results
-     *
-     * Reference: MySQL checkICPConsistency() (Mode 25), TiDB checkICPConsistency() (Mode 20)
-     */
+    // PG IndexScan: Index Cond (prefix column, pushed to index) vs Filter (non-prefix, after heap fetch).
+    // A bug in Index Cond evaluation produces wrong results vs SeqScan — composite index on (col1, col2).
     private void checkIndexCondPushdown() throws Exception {
         PostgresSchema schema = globalState.getSchema();
         List<PostgresTable> tables = schema.getDatabaseTables();
@@ -4338,20 +4093,8 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
 
     // ==================== Mode 24: BRIN Index (Block Range Index) ====================
 
-    /**
-     * Test PostgreSQL BRIN (Block Range Index) — a unique PG index type that stores
-     * summary info per block range rather than individual row pointers.
-     * BRIN is optimal for naturally ordered data (timestamps, sequential IDs).
-     *
-     * BRIN scan uses Bitmap Heap Scan with recheck conditions. A bug in the
-     * recheck logic could return wrong results compared to SeqScan.
-     *
-     * Strategy:
-     * 1. Find an INT column (BRIN works best with min/max on numeric types)
-     * 2. Create a BRIN index on the column
-     * 3. Run range queries (>, <, BETWEEN) that exercise BRIN scan
-     * 4. Compare BRIN Bitmap Scan vs SeqScan results
-     */
+    // BRIN (Block Range Index) stores min/max per block range — unique to PG, optimal for naturally ordered data.
+    // BRIN uses Bitmap Heap Scan with recheck conditions; bugs in recheck logic cause wrong results vs SeqScan.
     private void checkBRINIndex() throws Exception {
         PostgresSchema schema = globalState.getSchema();
         List<PostgresTable> tables = schema.getDatabaseTables();
@@ -4441,13 +4184,7 @@ public class PostgresIndexOracle implements TestOracle<PostgresGlobalState> {
 
     // ==================== Phase 3: Index Effectiveness Check ====================
 
-    /**
-     * Phase 3: Verify that the target index is actually used in the EXPLAIN plan.
-     * Checks for index name in the plan output AND that the scan type
-     * is not "Seq Scan" when an index was requested.
-     *
-     * Reference: MySQL isIndexEffectivelyUsed() method.
-     */
+    // Checks EXPLAIN output for the index name — "Seq Scan" in the plan means the index was not used.
     private boolean isIndexEffectivelyUsed(List<String> explainPlan, String indexName) {
         if (explainPlan == null || explainPlan.isEmpty()) return false;
         for (String line : explainPlan) {
