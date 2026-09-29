@@ -30,11 +30,11 @@ This section lists the bugs found by IdxDiff. Each entry includes a link to the 
 
 ### MariaDB Bugs
 
-*   **[MDEV-39773](https://jira.mariadb.org/browse/MDEV-39773)** (Confirmed)
+*   **[MDEV-39773](https://jira.mariadb.org/browse/MDEV-39773)** (In Review, Critical)
 
 *   **[MDEV-39823](https://jira.mariadb.org/browse/MDEV-39823)** (Confirmed)
 
-*   **[MDEV-39853](https://jira.mariadb.org/browse/MDEV-39853)** (Confirmed)
+*   **[MDEV-39853](https://jira.mariadb.org/browse/MDEV-39853)** (In Review, Critical)
 
 *   **[MDEV-39879](https://jira.mariadb.org/browse/MDEV-39879)** (Confirmed)
 
