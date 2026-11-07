@@ -52,11 +52,11 @@ This section lists the bugs found by IdxDiff. Each entry includes a link to the 
 
 ### PolarDB-X Bugs
 
-*   **[PolarDB-X Issue #294](https://github.com/polardb/polardbx-sql/issues/294)** (Open)
+*   **[PolarDB-X Issue #294](https://github.com/polardb/polardbx-sql/issues/294)** (Confirmed)
 
-*   **[PolarDB-X Issue #295](https://github.com/polardb/polardbx-sql/issues/295)** (Open)
+*   **[PolarDB-X Issue #295](https://github.com/polardb/polardbx-sql/issues/295)** (Confirmed)
 
-*   **[PolarDB-X Issue #296](https://github.com/polardb/polardbx-sql/issues/296)** (Open)
+*   **[PolarDB-X Issue #296](https://github.com/polardb/polardbx-sql/issues/296)** (Confirmed)
 
 ## Quick Start
 
@@ -114,6 +114,7 @@ Useful flags:
 - MariaDB
 - TiDB
 - PolarDB-X
+- PostgreSQL
 
 ## Documentation
 - For detailed usage instructions and advanced options, refer to the official [SQLancer documentation](https://github.com/sqlancer/sqlancer).
