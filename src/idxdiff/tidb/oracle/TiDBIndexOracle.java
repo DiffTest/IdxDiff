@@ -107,21 +107,21 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         }
     }
 
-    Index metadata cache — avoids per-query information_schema lookups
+    // Index metadata cache — avoids per-query information_schema lookups
     private Map<String, List<TiDBColumn>> indexedColumnsCache = new HashMap<>();
     private Map<String, List<List<TiDBColumn>>> compositeIndexCache = new HashMap<>();
     private boolean indexCacheValid = false;
 
-    ANALYZE TABLE batching — only analyze every N checks
+    // ANALYZE TABLE batching — only analyze every N checks
     private int checksSinceLastAnalyze = 0;
     private static final int ANALYZE_INTERVAL = 20;
     // Track which tables need ANALYZE after DDL changes
     private Set<String> tablesNeedingAnalyze = new HashSet<>();
 
-    Column value sampling cache — refreshed each check() call
+    // Column value sampling cache — refreshed each check() call
     private Map<String, List<String>> columnValueCache = new HashMap<>();
 
-    Statistics tracking — monitors oracle mode effectiveness
+    // Statistics tracking — monitors oracle mode effectiveness
     private java.util.Map<String, java.util.concurrent.atomic.AtomicInteger> modeStats = new java.util.HashMap<>();
     private java.util.Map<String, java.util.concurrent.atomic.AtomicInteger> modeBugStats = new java.util.HashMap<>();
     private int checkCount = 0;
@@ -197,15 +197,15 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
     public void check() throws Exception {
         ensureSufficientData();
 
-        Batched ANALYZE TABLE — only analyze every N checks
+        // Batched ANALYZE TABLE — only analyze every N checks
         checksSinceLastAnalyze++;
         if (checksSinceLastAnalyze >= ANALYZE_INTERVAL) {
             analyzeAllTables();
-            invalidateIndexCache(); Refresh cache after ANALYZE
+            invalidateIndexCache(); // Refresh cache after ANALYZE
             checksSinceLastAnalyze = 0;
         }
 
-        Clear column value cache each check
+        // Clear column value cache each check
         columnValueCache.clear();
 
         try {
@@ -222,17 +222,17 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
                 13, 13,     // Unique Index Consistency
                 // DEPRECATED: 20, 20, (optimizer switch pairwise — not index-related)
                 24, 24,     // NULL Index Handling
-                25, 25,     Subquery + Index
-                26, 26,     Enhanced Index Merge
-                27, 27,        Loose Index Scan
-                28, 28,     DML + Index Consistency
-                29, 29,     Generated Column + Index
-                30, 30,     Aggregate + Index
-                31, 31,     DESC Index Sort
-                32, 32,     DROP COLUMN + Index
-                33, 33,     Collation + Index
-                34, 34,     Implicit Type Conversion + Index
-                35, 35,     Complex AST Query + Index Hints (uses generateComplexQuery)
+                25, 25,     // Subquery + Index
+                26, 26,     // Enhanced Index Merge
+                27, 27,     // Loose Index Scan
+                28, 28,     // DML + Index Consistency
+                29, 29,     // Generated Column + Index
+                30, 30,     // Aggregate + Index
+                31, 31,     // DESC Index Sort
+                32, 32,     // DROP COLUMN + Index
+                33, 33,     // Collation + Index
+                34, 34,     // Implicit Type Conversion + Index
+                35, 35,     // Complex AST Query + Index Hints (uses generateComplexQuery)
                 // === NORMAL WEIGHT (1x): Mature/stable features ===
                 0, 1, 2, 3, 7, 8, 8, 12
                 // DEPRECATED: 4 (checkHashJoinVsMergeJoin), 11 (checkStreamAggVsHashAgg)
@@ -264,23 +264,23 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
             // DEPRECATED: case 20/21 checkICPConsistency() — not index-related (tests optimizer switch consistency)
             // case 20: checkICPConsistency(); break;
             // case 21: checkICPConsistency(); break;
-            case 22: checkSQLSemanticEquivalence(); break;   SQL semantic equivalence
-            case 23: checkDeterministicIndexQuery(); break;  Deterministic index query
+            case 22: checkSQLSemanticEquivalence(); break;   // SQL semantic equivalence
+            case 23: checkDeterministicIndexQuery(); break;  // Deterministic index query
             case 24: checkNullIndexHandling(); break;       // NULL index handling
-            case 25: checkSubqueryIndex(); break;           Subquery + Index
-            case 26: checkIndexMergeEnhanced(); break;      Enhanced Index Merge
-            case 27: checkLooseIndexScan(); break;          Loose Index Scan
-            case 28: checkDMLIndexConsistency(); break;     DML + Index Consistency
-            case 29: checkGeneratedColumnIndex(); break;    Generated Column + Index
-            case 30: checkAggregateIndex(); break;          Aggregate + Index
-            case 31: checkDescIndexSort(); break;           DESC Index Sort
-            case 32: checkDropColumnIndex(); break;         DROP COLUMN + Index
-            case 33: checkCollationIndex(); break;          Collation + Index
-            case 34: checkImplicitTypeConversionIndex(); break; Implicit Type Conversion + Index
-            case 35: checkComplexIndexQuery(); break;           Complex multi-index + deep expression query
+            case 25: checkSubqueryIndex(); break;           // Subquery + Index
+            case 26: checkIndexMergeEnhanced(); break;      // Enhanced Index Merge
+            case 27: checkLooseIndexScan(); break;          // Loose Index Scan
+            case 28: checkDMLIndexConsistency(); break;     // DML + Index Consistency
+            case 29: checkGeneratedColumnIndex(); break;    // Generated Column + Index
+            case 30: checkAggregateIndex(); break;          // Aggregate + Index
+            case 31: checkDescIndexSort(); break;           // DESC Index Sort
+            case 32: checkDropColumnIndex(); break;         // DROP COLUMN + Index
+            case 33: checkCollationIndex(); break;          // Collation + Index
+            case 34: checkImplicitTypeConversionIndex(); break; // Implicit Type Conversion + Index
+            case 35: checkComplexIndexQuery(); break;           // Complex multi-index + deep expression query
             }
 
-            Statistics tracking
+            // Statistics tracking
             trackMode(mode);
         } catch (NullPointerException e) {
             throw new IgnoreMeException();
@@ -3150,7 +3150,7 @@ public class TiDBIndexOracle implements TestOracle<TiDBGlobalState> {
         List<String> r1 = exec(baseQuery);
         if (r1 == null) return;
 
-        Expanded optimizer switches — 21 switches covering join, index, subquery,
+        // Expanded optimizer switches — 21 switches covering join, index, subquery,
         // agg, scan, and additional TiDB-specific optimizer paths.
         String setOff = Randomly.fromOptions(
                 // Join related

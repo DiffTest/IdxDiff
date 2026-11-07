@@ -97,10 +97,10 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
     private final ExpectedErrors errors;
     private String lastQueryString;
     private boolean dataPopulated = false;
-    Periodic data refresh counter — prevents table degradation
+    // Periodic data refresh counter — prevents table degradation
     // from DROP COLUMN, DELETE, etc. causing long-running tests to lose effectiveness.
     private int checksSinceLastDataRefresh = 0;
-    Effective test ratio tracking
+    // Effective test ratio tracking
     private int totalTests = 0;
     private int effectiveTests = 0;
     private int explainFiltered = 0;  // plansAreDifferent returned false
@@ -110,7 +110,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
     // Flag: set to true when compareResultsSorted/Strict filters out a result difference
     private boolean lastCompareFiltered = false;
 
-    MySQL allows max 64 indexes per table. Prune excess non-PRIMARY indexes
+    // MySQL allows max 64 indexes per table. Prune excess non-PRIMARY indexes
     // periodically to prevent "Too many keys specified" errors from dominating test output.
     private static final int MYSQL_MAX_INDEXES_PER_TABLE = 64;
     private static final int INDEX_PRUNE_THRESHOLD = 50;
@@ -207,21 +207,21 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
     public void check() throws Exception {
         // A. Ensure tables have sufficient data for the optimizer to consider indexes
         ensureSufficientData();
-        Periodic data refresh: every 300 checks, re-insert data
+        // Periodic data refresh: every 300 checks, re-insert data
         // to counteract table degradation from DROP COLUMN, DELETE, etc.
         if (++checksSinceLastDataRefresh > 300) {
             checksSinceLastDataRefresh = 0;
             dataPopulated = false; // Force re-run of ensureSufficientData next time
             ensureSufficientData();
         }
-        Periodically prune excess indexes to prevent "Too many keys specified" errors.
+        // Periodically prune excess indexes to prevent "Too many keys specified" errors.
         // MySQL allows max 64 indexes per table. The fuzzer keeps creating indexes, so we
         // periodically drop excess non-PRIMARY indexes when approaching the limit.
         if (++checksSinceLastIndexPrune >= 50) {
             checksSinceLastIndexPrune = 0;
             pruneExcessIndexes();
         }
-        Track total tests and log effective test ratio periodically
+        // Track total tests and log effective test ratio periodically
         totalTests++;
         if (totalTests % 100 == 0) {
             log("[STATS] total=" + totalTests + " compared=" + queriesCompared
@@ -288,15 +288,15 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
             // === P0: FULLTEXT Index removed for PolarDB-X (not supported) ===
             // case 24: checkFullTextIndex(); break;
             // === P3: New Metamorphic Strategies ===
-            case 25: checkICPConsistency(); break;          ICP on vs off
-            case 26: checkOptimizerSwitchDetailed(); break; Optimizer switch pairwise
-            case 27: checkSQLSemanticEquivalence(); break;  SQL semantic equivalence
-            case 28: checkDeterministicIndexQuery(); break;  Deterministic index query
+            case 25: checkICPConsistency(); break;          // ICP on vs off
+            case 26: checkOptimizerSwitchDetailed(); break; // Optimizer switch pairwise
+            case 27: checkSQLSemanticEquivalence(); break;  // SQL semantic equivalence
+            case 28: checkDeterministicIndexQuery(); break; // Deterministic index query
             case 29: checkNullIndexHandling(); break;        // NULL index handling
             // === P0 NEW: Functional Index, DML+Index, DESC Index ===
-            case 30: checkFunctionalIndex(); break;          Functional Index
-            case 31: checkDMLIndexConsistency(); break;      DML + Index verification
-            case 32: checkDescIndexSort(); break;            DESC Index sort
+            case 30: checkFunctionalIndex(); break;          // Functional Index
+            case 31: checkDMLIndexConsistency(); break;      // DML + Index verification
+            case 32: checkDescIndexSort(); break;            // DESC Index sort
             // === P1: Generated Column, Collation, Type Mismatch ===
             case 33: checkGeneratedColumnIndex(); break;     // P1-1: Generated Column + Index
             case 34: checkCollationIndex(); break;           // P1-2: Collation + Index
@@ -407,7 +407,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
         List<String> explainPlan2 = getExplainPlan(forcedQuery);
         if (!plansAreDifferent(explainPlan1, explainPlan2)) return;
 
-        Verify FORCE INDEX version effectively uses the index
+        // Verify FORCE INDEX version effectively uses the index
         if (!isIndexEffectivelyUsed(explainPlan2, idxName)) return;
 
         // Plan A: Default optimizer
@@ -672,10 +672,10 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
     }
 
     // ==================== Mode 9: Aggregate Plan ====================
-    Now uses index-aware aggregate query instead of random AST
+    // Now uses index-aware aggregate query instead of random AST
 
     private void checkAggregatePlan() throws Exception {
-        Generate index-aware aggregate query referencing actual index columns
+        // Generate index-aware aggregate query referencing actual index columns
         String queryString = generateIndexAwareAggregateQuery();
         if (queryString == null) {
             // Fallback to AST aggregate if no indexes available
@@ -761,7 +761,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
 
     // MySQL 8.0+ INVISIBLE indexes are ignored by the optimizer — creating one must not change results.
     private void checkInvisibleIndex() throws Exception {
-        Pick table/column first, then generate query referencing that column
+        // Pick table/column first, then generate query referencing that column
         MySQLSchema schema = globalState.getSchema();
         List<MySQLTable> tables = schema.getDatabaseTables();
         if (tables.isEmpty()) return;
@@ -803,7 +803,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
 
         compareResultsSorted(r1, r2, queryString, "POLARDB_INVISIBLE_IDX");
 
-        Additional test: enable use_invisible_indexes to actually exercise
+        // Additional test: enable use_invisible_indexes to actually exercise
         // the INVISIBLE index, then compare FORCE INDEX vs IGNORE INDEX.
         // This detects bugs where the INVISIBLE index returns incorrect results when used.
         String countWhere = op.equals("IS NOT NULL")
@@ -859,7 +859,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
             return;
         }
 
-        Use varied WHERE conditions, not just IS NOT NULL
+        // Use varied WHERE conditions, not just IS NOT NULL
         String val = generateDataAwareValueForType(tblName, col);
         String whereCond;
         int patternType = Randomly.fromOptions(0, 1, 2, 3, 4);
@@ -885,7 +885,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
     }
 
     // ==================== Mode 13: HASH vs BTREE ====================
-    Now uses varied WHERE conditions instead of only IS NOT NULL
+    // Now uses varied WHERE conditions instead of only IS NOT NULL
 
     // For InnoDB, HASH is silently converted to BTREE; tests that different index types don't corrupt results.
     private void checkHashVsBtree() throws Exception {
@@ -918,7 +918,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
         if (!hashCreated || !btreeCreated) return;
         analyzeTable(tblName);
 
-        Use varied WHERE conditions, not just IS NOT NULL ORDER BY
+        // Use varied WHERE conditions, not just IS NOT NULL ORDER BY
         String val = generateDataAwareValueForType(tblName, col);
         String whereCond;
         int patternType = Randomly.fromOptions(0, 1, 2, 3, 4, 5);
@@ -983,7 +983,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
 
     // ==================== Mode 15: Index Merge (B2 - P0) ====================
 
-    Mode 15: Uses generateDataAwareValueForType for better index hit rate
+    // Mode 15: Uses generateDataAwareValueForType for better index hit rate
     private void checkIndexMerge() throws Exception {
         MySQLSchema schema = globalState.getSchema();
         List<MySQLTable> tables = schema.getDatabaseTables();
@@ -1010,7 +1010,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
         } catch (Exception e) { }
         if (!created1 || !created2) return;
         analyzeTable(tblName);
-        Use data-aware values instead of random values for better index hit
+        // Use data-aware values instead of random values for better index hit
         String val1 = generateDataAwareValueForType(tblName, col1);
         String val2 = generateDataAwareValueForType(tblName, col2);
         String whereClause = col1.getName() + " = " + val1 + " OR " + col2.getName() + " = " + val2;
@@ -1023,7 +1023,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
         lastQueryString = "[INDEX_MERGE] " + queryString;
         log(queryString);
 
-        Add EXPLAIN filter: only compare results if disabling
+        // Add EXPLAIN filter: only compare results if disabling
         // index_merge actually changes the execution plan. Without this filter,
         // many tests compare identical full-table-scan plans → wasted effort.
         List<String> plan1 = getExplainPlan(queryString);
@@ -1074,7 +1074,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
         lastQueryString = "[LOOSE_SCAN] " + queryString;
         log(queryString);
 
-        Use FORCE INDEX vs IGNORE INDEX comparison instead of
+        // Use FORCE INDEX vs IGNORE INDEX comparison instead of
         // the incorrect "loosescan=off" optimizer_switch (which controls semijoin
         // loose scan, NOT the GROUP BY Loose Index Scan optimization).
         // Loose Index Scan for GROUP BY has no dedicated optimizer_switch —
@@ -1099,7 +1099,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
     }
 
     // ==================== Mode 17: Covering Index (B1 - P1) ====================
-    Now verifies "Using index" in EXPLAIN before comparing
+    // Now verifies "Using index" in EXPLAIN before comparing
 
     private void checkCoveringIndex() throws Exception {
         MySQLSchema schema = globalState.getSchema();
@@ -1130,7 +1130,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
         String forceQuery = "SELECT " + selectCols + " FROM " + tblName + " FORCE INDEX(" + idxName + ")"
                 + " WHERE " + whereCol.getName() + " " + op + " " + val + " ORDER BY " + idxCols.get(0).getName() + ";";
 
-        Verify FORCE INDEX version triggers index-only scan ("Using index")
+        // Verify FORCE INDEX version triggers index-only scan ("Using index")
         List<String> explainForce = getExplainPlan(forceQuery);
         boolean isIndexOnlyScan = planHasExtra(explainForce, "Using index");
         if (!isIndexOnlyScan) {
@@ -1150,7 +1150,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
     }
 
     // ==================== Mode 18: ORDER BY + LIMIT Index (B6 - P1) ====================
-    Uses generateDataAwareValueForType instead of random values
+    // Uses generateDataAwareValueForType instead of random values
 
     private void checkOrderByLimitIndex() throws Exception {
         MySQLSchema schema = globalState.getSchema();
@@ -1171,7 +1171,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
         String direction = Randomly.fromOptions("ASC", "DESC");
         String whereClause = "";
         if (Randomly.getBoolean()) {
-            Use data-aware values for better index hit rate
+            // Use data-aware values for better index hit rate
             String val = generateDataAwareValueForType(tblName, col);
             String op = Randomly.fromOptions(">", "<", ">=", "<=", "!=");
             whereClause = " WHERE " + colName + " " + op + " " + val;
@@ -1248,7 +1248,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
     }
 
     // ==================== Mode 20: Range Boundary (B4 - P2) ====================
-    Uses generateDataAwareValueForType instead of random values
+    // Uses generateDataAwareValueForType instead of random values
 
     private void checkRangeBoundary() throws Exception {
         MySQLSchema schema = globalState.getSchema();
@@ -1266,10 +1266,10 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
             analyzeTable(tblName);
         } catch (Exception e) { return; }
         Randomly r = globalState.getRandomly();
-        Use MIN/MAX for range boundaries to avoid impossible ranges (low > high)
+        // Use MIN/MAX for range boundaries to avoid impossible ranges (low > high)
         // This was the #1 cause of empty result sets in MySQL testing (~50% of range queries were useless)
         String[] minMax = getColumnMinMax(tblName, colName);
-        getColumnMinMax() returns raw JDBC strings without quotes.
+        // getColumnMinMax() returns raw JDBC strings without quotes.
         // For VARCHAR columns, we must wrap values in quotes for valid SQL syntax.
         if (minMax != null && col.getType() == MySQLSchema.MySQLDataType.VARCHAR) {
             if (!minMax[0].startsWith("'")) {
@@ -1408,7 +1408,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
 
         MySQLTable table = Randomly.fromList(tables);
         if (table.getColumns().isEmpty()) return;
-        Exclude AUTO_INCREMENT columns — CREATE UNIQUE INDEX on them triggers
+        // Exclude AUTO_INCREMENT columns — CREATE UNIQUE INDEX on them triggers
         // "ALTER TABLE causes auto_increment resequencing" error.
         List<MySQLColumn> nonAutoIncCols = new ArrayList<>();
         for (MySQLColumn c : table.getColumns()) {
@@ -1426,7 +1426,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
         List<String> r1 = executeQuery(countBefore);
         if (r1 == null) return;
 
-        Before CREATE UNIQUE INDEX, make all INVISIBLE indexes on this column VISIBLE.
+        // Before CREATE UNIQUE INDEX, make all INVISIBLE indexes on this column VISIBLE.
         // MySQL's CREATE UNIQUE INDEX can internally rebuild indexes and fail with
         // "A primary key index cannot be invisible" if there are invisible indexes on the column.
         makeColumnIndexesVisible(tblName, colName);
@@ -1476,7 +1476,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
 
         String tblName = table.getName();
 
-        Find columns that are safe to drop — exclude columns referenced by
+        // Find columns that are safe to drop — exclude columns referenced by
         // generated columns. MySQL rejects DROP COLUMN if the column has a generated column
         // dependency ("Column 'X' has a generated column dependency").
         // We query information_schema.COLUMNS to find generated columns and their expressions,
@@ -1496,7 +1496,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
         String colName = col.getName();
 
         // Create an index on this column
-        Before CREATE INDEX, make all INVISIBLE indexes on this table VISIBLE.
+        // Before CREATE INDEX, make all INVISIBLE indexes on this table VISIBLE.
         // MySQL's CREATE INDEX internally triggers a table rebuild, and can fail with
         // "A primary key index cannot be invisible" if there are invisible indexes on the table.
         makeTableIndexesVisible(tblName);
@@ -1516,7 +1516,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
         List<String> r1 = executeQuery(queryBefore);
         // r1 can be null — we still try the DROP
 
-        Before DROP COLUMN, make all INVISIBLE indexes on this column VISIBLE.
+        // Before DROP COLUMN, make all INVISIBLE indexes on this column VISIBLE.
         // MySQL's ALTER TABLE DROP COLUMN internally rebuilds indexes, and can fail with
         // "A primary key index cannot be invisible" if there are invisible indexes on the column.
         // Making them visible first avoids this false-positive trigger.
@@ -1622,7 +1622,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
                 // Strip any formatting artifacts from query result
                 String cleanIdxName = idxName.trim();
                 try {
-                    Use backticks around index name to handle
+                    // Use backticks around index name to handle
                     // reserved words and special characters safely.
                     globalState.executeStatement(new SQLQueryAdapter(
                             "ALTER TABLE " + tableName + " ALTER INDEX `" + cleanIdxName + "` VISIBLE;",
@@ -2026,7 +2026,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
             MySQLColumn col = idxCols.get(i);
             String colName = col.getName();
             String condition;
-            Reduced IS NULL weight: now 0-18 range (19 options), IS NULL only at case 18 (~5%)
+            // Reduced IS NULL weight: now 0-18 range (19 options), IS NULL only at case 18 (~5%)
             int opType = r.getInteger(0, 19); // 0-18: 19 options
             switch (opType) {
             case 0: // col = value (point lookup — best for ref access) — use sampled data
@@ -2052,7 +2052,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
                 }
                 condition = colName + " IN (" + inList + ")";
                 break;
-            case 18: IS NULL / IS NOT NULL — reduced weight (~5%)
+            case 18: // IS NULL / IS NOT NULL — reduced weight (~5%)
                 condition = Randomly.getBoolean() ? colName + " IS NULL" : colName + " IS NOT NULL";
                 break;
             case 5: { // col >= val AND col <= val (closed range) —guaranteed ordered
@@ -2144,7 +2144,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
         String tblName = table.getName();
         MySQLColumn groupByCol = idxCols.get(0); // Use first index column for GROUP BY
         MySQLColumn aggCol = idxCols.size() > 1 ? idxCols.get(1) : idxCols.get(0);
-        Avoid SUM/AVG on FLOAT/DOUBLE columns — different execution plans
+        // Avoid SUM/AVG on FLOAT/DOUBLE columns — different execution plans
         // may accumulate floating-point values in different order, producing micro-precision
         // differences that are NOT real bugs but cause false positives.
         // For FLOAT/DOUBLE columns, only use COUNT/MIN/MAX (exact for any scan order).
@@ -2379,7 +2379,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
                 if (table.getColumns().isEmpty()) continue;
                 // Skip views — cannot INSERT into views
                 if (table.isView()) continue;
-                Filter out generated columns (named gen_col_*) from INSERT target.
+                // Filter out generated columns (named gen_col_*) from INSERT target.
                 // Generated columns are auto-computed by MySQL and cannot receive explicit values.
                 List<MySQLColumn> insertableCols = table.getColumns().stream()
                         .filter(c -> !c.getName().startsWith("gen_col_"))
@@ -2449,7 +2449,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
             List<String> sampled = sampleColumnValues(tableName, col.getName(), 5);
             if (sampled != null && !sampled.isEmpty()) {
                 String val = Randomly.fromList(sampled);
-                Wrap VARCHAR values in quotes — sampled values are raw strings from DB
+                // Wrap VARCHAR values in quotes — sampled values are raw strings from DB
                 if (col.getType() == MySQLSchema.MySQLDataType.VARCHAR && val != null && !val.equals("NULL")) {
                     val = "'" + sanitizeForSqlString(val) + "'";
                 }
@@ -3531,22 +3531,22 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
 
         // LIMIT without ORDER BY → non-deterministic row selection, skip mismatch
         if (upperQuery.contains("LIMIT") && !upperQuery.contains("ORDER BY")) {
-            lastCompareFiltered = true; Flag for COUNT(*) fallback
+            lastCompareFiltered = true; // Flag for COUNT(*) fallback
             return;
         }
 
         // GROUP BY with constant expressions (no column refs) → non-deterministic.
         if (hasNonDeterministicGroupBy(queryString)) {
-            lastCompareFiltered = true; Flag for COUNT(*) fallback
+            lastCompareFiltered = true; // Flag for COUNT(*) fallback
             return;
         }
 
-        REMOVED: GROUP BY with different result set sizes filter.
+        // REMOVED: GROUP BY with different result set sizes filter.
         // GROUP BY on deterministic expressions should always produce the same number of rows.
         // Non-deterministic GROUP BY is already handled above.
         // Different sizes = real bug (missing/extra rows from index plan).
 
-        REMOVED: LIMIT with different result sizes blanket filter.
+        // REMOVED: LIMIT with different result sizes blanket filter.
         // This was too aggressive — different sizes with LIMIT can indicate a real bug
         // (one plan returns fewer rows than it should). Non-deterministic LIMIT is
         // handled below by checking ORDER BY tie-breaker uniqueness.
@@ -3561,14 +3561,14 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
                 // Fall through to report the bug
             } else {
                 // No unique tie-breaker + LIMIT → row selection is non-deterministic
-                lastCompareFiltered = true; Flag for COUNT(*) fallback
+                lastCompareFiltered = true; // Flag for COUNT(*) fallback
                 return;
             }
         }
 
         List<String> combinedString = new ArrayList<>();
         combinedString.add("-- [" + mode + "] Query: " + queryString);
-        effectiveTests++; Count this as an effective test
+        effectiveTests++; // Count this as an effective test
         ComparatorHelper.assumeResultSetsAreEqual(r1, r2, queryString, combinedString, globalState);
     }
 
@@ -3612,7 +3612,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
 
         List<String> combinedString = new ArrayList<>();
         combinedString.add("-- [" + mode + "] Query: " + queryString);
-        effectiveTests++; Count this as an effective test
+        effectiveTests++; // Count this as an effective test
         ComparatorHelper.assumeResultSetsAreEqual(r1, r2, queryString, combinedString, globalState);
     }
 
@@ -3802,7 +3802,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
                 return true; // Plans differ in access method or index
             }
 
-            Also compare Extra field (index 5) for execution strategy differences
+            // Also compare Extra field (index 5) for execution strategy differences
             String extra1 = parts1.length > 5 ? parts1[5] : "";
             String extra2 = parts2.length > 5 ? parts2[5] : "";
             if (!extra1.equals(extra2)) {
@@ -3913,7 +3913,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
     // Integer values require exact match (COUNT=100 vs 99 is a real bug, not floating-point noise).
     // Float/DOUBLE uses 1e-10 relative tolerance — old 1e-6 was masking COUNT(*)=99.9999 vs 100.
     private boolean isApproximatelyEqualNumeric(String s1, String s2) {
-        Fast path: if both look like integers, require exact match
+        // Fast path: if both look like integers, require exact match
         if (isIntegerString(s1) && isIntegerString(s2)) {
             return s1.equals(s2); // "100" != "99" → real bug
         }
@@ -3926,7 +3926,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
             double diff = Math.abs(d1 - d2);
             double maxVal = Math.max(Math.abs(d1), Math.abs(d2));
             if (maxVal < EPSILON) return diff < EPSILON;
-            Much tighter tolerance: 1e-10 instead of 1e-6
+            // Much tighter tolerance: 1e-10 instead of 1e-6
             // Index bugs in COUNT/SUM/AVG typically cause off-by-1 or larger errors,
             // not micro-floating-point differences. 1e-6 was masking COUNT(*)=100 vs 99.9999.
             return diff / maxVal < 1e-10;
@@ -3957,7 +3957,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
         MySQLTable table = Randomly.fromList(tables);
         List<MySQLColumn> textCols = new ArrayList<>();
         for (MySQLColumn col : table.getColumns()) {
-            Skip generated columns — FULLTEXT index cannot be created on
+            // Skip generated columns — FULLTEXT index cannot be created on
             // VIRTUAL/STORED generated columns (MySQL limitation).
             if (col.getName().startsWith("gen_col_")) continue;
             if (col.getType() == MySQLSchema.MySQLDataType.VARCHAR) {
@@ -3971,7 +3971,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
         String colName = col.getName();
 
         // Create FULLTEXT index
-        Detect index name collision and regenerate a unique name.
+        // Detect index name collision and regenerate a unique name.
         // The name is based on colName.hashCode() % 10000, which can collide
         // when different columns hash to the same value. If the generated name
         // already exists on this table (possibly on a different column), we
@@ -4030,7 +4030,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
         } else {
             searchTerm = Randomly.fromOptions("test", "hello", "world", "data", "index");
         }
-        Ensure searchTerm length >= innodb_ft_min_token_size (default 3).
+        // Ensure searchTerm length >= innodb_ft_min_token_size (default 3).
         // Shorter terms are silently ignored by FULLTEXT search → both queries return
         // empty set → comparison passes but test is useless.
         if (searchTerm.length() < 3) {
@@ -4608,7 +4608,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
             break;
         }
         case 5:
-            Template 6: Covering index scan — use COUNT(*) for determinism.
+            // Template 6: Covering index scan — use COUNT(*) for determinism.
             // Previously used ORDER BY non-unique colName + LIMIT 50, which was always
             // filtered out by compareResultsStrict's non-determinism check → test was useless.
             // COUNT(*) is always deterministic regardless of scan order.
@@ -4853,7 +4853,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
         if (tables.isEmpty()) return;
         MySQLTable table = Randomly.fromList(tables);
         if (table.getColumns().isEmpty()) return;
-        Functional index requires InnoDB (MEMORY/HEAP/MyISAM etc. don't support generated columns)
+        // Functional index requires InnoDB (MEMORY/HEAP/MyISAM etc. don't support generated columns)
         if (table.getEngine() != MySQLSchema.MySQLTable.MySQLEngine.INNO_DB) return;
         String tblName = table.getName();
         MySQLColumn col = Randomly.fromList(table.getColumns());
@@ -4861,7 +4861,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
         FuncIdxTemplate template = pickFuncIdxTemplate(col);
         if (template == null) return;
 
-        Skip overflow-prone functional index expressions when the column contains extreme values.
+        // Skip overflow-prone functional index expressions when the column contains extreme values.
         // Expressions like -col on INT can overflow when col = -2147483648 (INT_MIN),
         // col+1 overflows when col = 2147483647 (INT_MAX), col*2 overflows for large values.
         // This prevents "Data truncation: Value is out of range for functional index" errors.
@@ -4908,7 +4908,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
         } catch (Exception e) { return; }
 
         try {
-            Wrap test body in try-finally to always drop the functional index afterwards.
+            // Wrap test body in try-finally to always drop the functional index afterwards.
             // Without cleanup, expressions like CAST(ABS(c0) AS BIGINT) persist on the table,
             // and subsequent DML (INSERT/UPDATE) with values like -9223372036854775808 trigger
             // "Value is out of range for functional index" — crashing the fuzzer.
@@ -4949,7 +4949,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
                 compareResultsStrict(r3, r4, selForce, "POLARDB_FUNC_IDX_ORDER");
             }
         } finally {
-            Always drop the functional index after testing.
+            // Always drop the functional index after testing.
             // Prevents overflow errors on subsequent DML operations.
             try {
                 globalState.executeStatement(new SQLQueryAdapter(
@@ -4967,7 +4967,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
         static final FuncIdxTemplate[] INT_TEMPLATES = {
             new FuncIdxTemplate("%s + 1", "%s + 1", true, false),
             new FuncIdxTemplate("%s * 2", "%s * 2", true, false),
-            Use CAST(ABS(%s) AS BIGINT) to avoid Data truncation when ABS(-2147483648) overflows SIGNED INT
+            // Use CAST(ABS(%s) AS BIGINT) to avoid Data truncation when ABS(-2147483648) overflows SIGNED INT
             new FuncIdxTemplate("CAST(ABS(%s) AS BIGINT)", "ABS(%s)", true, false),
             new FuncIdxTemplate("MOD(%s, 10)", "MOD(%s, 10)", true, false),
             new FuncIdxTemplate("%s DIV 10", "%s DIV 10", true, false),
@@ -4992,7 +4992,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
         else if (type == MySQLSchema.MySQLDataType.VARCHAR)
             return Randomly.fromOptions(FuncIdxTemplate.VARCHAR_TEMPLATES);
         else if (type == MySQLSchema.MySQLDataType.FLOAT || type == MySQLSchema.MySQLDataType.DOUBLE || type == MySQLSchema.MySQLDataType.DECIMAL)
-            Use CAST(ABS(%s) AS BIGINT) to avoid Data truncation when ABS(large_float) overflows BIGINT
+            // Use CAST(ABS(%s) AS BIGINT) to avoid Data truncation when ABS(large_float) overflows BIGINT
             return Randomly.fromOptions(new FuncIdxTemplate("CAST(ABS(%s) AS BIGINT)","ABS(%s)",false,false), new FuncIdxTemplate("-%s","-%s",false,false), new FuncIdxTemplate("IFNULL(%s, 0)","IFNULL(%s, 0)",false,false));
         return null;
     }
@@ -5030,7 +5030,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
         }
         String colName = idxCol.getName();
 
-        Skip if index column is a generated column (cannot be used in UPDATE SET)
+        // Skip if index column is a generated column (cannot be used in UPDATE SET)
         if (colName.startsWith("gen_col_")) return;
 
         String dmlStmt = generateIndexDML(tblName, colName, idxCol);
@@ -5094,7 +5094,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
         MySQLTable table = Randomly.fromList(tables);
         if (table.getColumns().isEmpty()) return;
 
-        Skip non-InnoDB tables — MyISAM and other engines don't support DESC indexes.
+        // Skip non-InnoDB tables — MyISAM and other engines don't support DESC indexes.
         // MySQL reports: "The storage engine for the table doesn't support descending indexes"
         if (table.getEngine() != MySQLSchema.MySQLTable.MySQLEngine.INNO_DB) return;
 
@@ -5186,17 +5186,17 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
         if (table.getColumns().size() < 2) return;
         String tblName = table.getName();
 
-        Skip non-InnoDB tables — only InnoDB supports generated columns.
+        // Skip non-InnoDB tables — only InnoDB supports generated columns.
         // HEAP/MEMORY, MyISAM, etc. will error with:
         // "'Specified storage engine' is not supported for generated columns."
         if (table.getEngine() != MySQLSchema.MySQLTable.MySQLEngine.INNO_DB) return;
 
-        Skip tables with invisible indexes — ALTER TABLE ADD GENERATED COLUMN
+        // Skip tables with invisible indexes — ALTER TABLE ADD GENERATED COLUMN
         // triggers a table rebuild, and MySQL rejects with "A primary key index cannot be invisible"
         // if any unique/primary index on the table is invisible.
         if (hasInvisibleIndexes(tblName)) return;
 
-        Filter out AUTO_INCREMENT columns — MySQL rejects generated columns
+        // Filter out AUTO_INCREMENT columns — MySQL rejects generated columns
         // that reference AUTO_INCREMENT columns with:
         // "Generated column 'xxx' cannot refer to auto-increment column."
         Set<String> autoIncCols = getAutoIncrementColumns(tblName);
@@ -5209,9 +5209,9 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
         if (candidateCols.isEmpty()) return;
         MySQLColumn col1 = candidateCols.get(0);
         String col1Name = col1.getName();
-        Use random suffix to avoid "Duplicate column name" on repeated invocations
+        // Use random suffix to avoid "Duplicate column name" on repeated invocations
         String genColName = "gen_col_" + Math.abs(col1Name.hashCode() % 10000) + "_" + Randomly.smallNumber() + "_" + Randomly.smallNumber();
-        Check if a column with this name already exists, skip if so
+        // Check if a column with this name already exists, skip if so
         Set<String> existingColNames = new HashSet<>();
         for (MySQLColumn c : table.getColumns()) {
             existingColNames.add(c.getName().toLowerCase());
@@ -5224,7 +5224,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
         String genExpr;
         String genColType;
         if (col1.getType() == MySQLSchema.MySQLDataType.INT || col1.getType() == MySQLSchema.MySQLDataType.BIGINT) {
-            Pick expression first, then check for overflow-prone values in existing data.
+            // Pick expression first, then check for overflow-prone values in existing data.
             // Generated columns with expressions like col*2, ABS(col), IFNULL(col,0)+1 can cause
             // "Data truncation: Out of range value for column" when existing data has extreme values.
             boolean isBigInt = (col1.getType() == MySQLSchema.MySQLDataType.BIGINT);
@@ -5239,7 +5239,7 @@ public class PolarDBIndexOracle implements TestOracle<MySQLGlobalState> {
                 "IFNULL(" + col1Name + ", 0) + 1"
             );
 
-            Skip overflow-prone generated column expressions when the column contains extreme values.
+            // Skip overflow-prone generated column expressions when the column contains extreme values.
             // ALTER TABLE ADD COLUMN ... GENERATED ALWAYS AS (expr) evaluates expr for all existing rows,
             // so even a single row with an extreme value will cause Data truncation.
             if (genExpr.equals(col1Name + " * 2")) {
